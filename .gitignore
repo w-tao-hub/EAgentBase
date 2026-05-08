@@ -1,0 +1,59 @@
+# Python 字节码与解释器缓存目录，提交这些文件没有价值。
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Python 本地编译扩展产物，通常由构建流程生成。
+*.so
+
+# 打包与分发阶段生成的目录和元数据，应该由构建工具重新产出。
+.Python
+build/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+pip-wheel-metadata/
+*.egg-info/
+*.egg
+.installed.cfg
+MANIFEST
+
+# 虚拟环境目录只用于本地依赖隔离，不应进入版本库。
+.venv/
+venv/
+env/
+ENV/
+
+# 测试、覆盖率、静态检查与类型检查缓存属于本地临时产物。
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+.hypothesis/
+.mypy_cache/
+.pyre/
+.ruff_cache/
+
+# 常见日志与本地 SQLite 数据文件通常是运行时生成内容。
+*.log
+*.sqlite3
+
+# Jupyter Notebook 检查点文件属于编辑器自动生成内容。
+.ipynb_checkpoints/
+
+.env
+mcp_servers.json
+
+
+
+**/.DS_Store

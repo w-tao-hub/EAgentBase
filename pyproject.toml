@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+
+[project]
+name = "agent-framework"
+version = "0.1.0"
+dependencies = [
+  "fastapi",
+  "uvicorn",
+  "pydantic>=2",
+  "pydantic-settings>=2",
+  "redis>=5",
+  "litellm>=1.0.0",
+  "mcp>=1.12.4",
+  "httpx",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest",
+  "pytest-asyncio",
+  "fakeredis",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"

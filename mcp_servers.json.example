@@ -1,0 +1,56 @@
+[
+  // streamable-http 示例：
+  // 这一项展示远端 MCP 服务在 HTTP 传输下的完整可配置参数。
+  {
+    // 必填：服务唯一标识。
+    "server_id": "baidu-baike",
+    // 可选：服务显示名，便于日志或管理界面展示。
+    "name": "百度百科 MCP",
+    // 可选：服务说明文本，仅做展示与排障上下文，不参与运行逻辑。
+    "description": "streamable-http 传输示例。若无需自定义请求头，可把 headers 保持为空对象。",
+    // 可选：是否启用当前服务。
+    "enabled": true,
+    // 必填：传输类型，目前支持 stdio 与 streamable-http。
+    "transport": "streamable-http",
+    // 可选：会话级超时（秒）。对 streamable-http 来说会写入 ClientSession 读超时，
+    // 同时覆盖普通 HTTP 请求超时；SSE 长连接读取超时仍保持 MCP SDK 默认值。
+    "timeout_seconds": 30,
+    // 必填：远端 MCP 服务地址。
+    "url": "https://baike.baidu.com/mcp/streamable?ak={ak}&sk={sk}",
+    // 可选：自定义请求头。需要鉴权时，统一在这里填写 Bearer Token 或其他头。
+    "headers": {},
+    // 可选：是否校验证书。生产环境通常保持 true。
+    "verify_ssl": true,
+    // 可选：是否跟随重定向。默认建议保持 true。
+    "follow_redirects": true
+  },
+
+  // stdio 示例：
+  // 这一项展示本地子进程 MCP 服务在 stdio 传输下的完整可配置参数。
+  {
+    // 必填：服务唯一标识。
+    "server_id": "local-stdio-demo",
+    // 可选：服务显示名。
+    "name": "本地 stdio 示例",
+    // 可选：服务说明文本。
+    "description": "本地 MCP Server 示例。默认禁用，按需替换 command、args、env 与 cwd 后再启用。",
+    // 可选：默认禁用，避免示例配置在本地直接启动不存在的脚本。
+    "enabled": false,
+    // 必填：传输类型。
+    "transport": "stdio",
+    // 可选：会话级超时（秒），会映射到 ClientSession 的 read_timeout_seconds。
+    "timeout_seconds": 30,
+    // 必填：启动命令。
+    "command": ".venv/bin/python",
+    // 可选：启动参数数组。
+    "args": ["scripts/example_mcp_server.py"],
+    // 可选：启动子进程时附加的环境变量。
+    "env": {
+      "EXAMPLE_API_KEY": "replace-me"
+    },
+    // 可选：子进程工作目录。
+    "cwd": ".",
+    // 可选：启动与 initialize 阶段的超时（秒）。
+    "startup_timeout_seconds": 10
+  }
+]

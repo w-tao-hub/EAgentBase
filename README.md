@@ -2,16 +2,9 @@
 
 ## 项目定位
 
-本项目是一个面向后续多智能体演进的通用智能体骨架，目前已落地单主智能体 + 子代理 Task 派发的最小可运行闭环。
+企业可用的最小可快速搭建的通用智能体基座，提供基础骨架，企业可根据业务自行扩展。
 
-当前实现以以下设计文档为依据，并结合现有代码形成实际工程结构：
-
-- `general-agent.md`：通用智能体骨架总设计。
-- `docs/superpowers/specs/2026-04-30-multi-agent-task-design.md`：多智能体 Task 派发设计。
-- `docs/superpowers/specs/2026-04-30-session-storage-multi-agent-design.md`：多智能体会话存储设计。
-- `docs/superpowers/specs/2026-05-06-multi-agent-context-summary-refactor-design.md`：多智能体上下文摘要重构设计。
-- `docs/superpowers/plans/2026-04-30-multi-agent-task-implementation.md`：多智能体实现计划。
-- `docs/superpowers/plans/2026-05-06-multi-agent-context-summary-refactor-implementation.md`：上下文摘要重构实施计划。
+> **面向开发者**：本项目不是开箱即用的产品，需要具备 Python 编程基础。使用者应能理解 FastAPI、Redis、异步编程等概念，并根据业务需求进行定制开发。
 
 当前能力边界：
 
@@ -23,25 +16,16 @@
 
 ```text
 .
-├── AGENTS.md                                          Codex 代理协作约束、执行原则与"教训"记录。
 ├── README.md                                          项目整体架构说明、目录职责与运行入口说明。
-├── .claude/                                           Claude 侧代理规范目录。
-│   ├── CLAUDE.md                                      Claude 侧工作约束、教训记录入口。
-│   └── code_rule.md                                   Claude 侧开发规范文档。
-├── .codex/                                            Codex 侧规则与技能目录。
-│   ├── code_rule.md                                   Codex 侧开发规范文档，内容与 Claude 规范保持一致。
-│   └── skills/                                        本地 Codex skills 目录。
 ├── .env                                               本地开发实际环境变量文件。
 ├── .env.example                                       项目环境变量模板。
 ├── .gitignore                                         Git 忽略规则。
-├── agents/                                            自定义子代理 md 配置目录；目录不存在时按空目录处理。
+├── agents/                                            自定义子代理 md 配置目录（如 Echo.md），目录不存在时按空目录处理。
 ├── app/                                               主应用源码目录。
-├── docs/                                              设计文档与执行计划目录。
-├── general-agent.md                                   通用智能体骨架的总设计文档，是 v0 架构来源之一。
 ├── mcp_servers.json                                   MCP 服务配置文件，声明多个 MCP server。
 ├── mcp_servers.json.example                           MCP 服务配置模板。
 ├── pyproject.toml                                     Python 项目元数据、依赖列表与 pytest 配置入口。
-├── skills/                                            根级 Skills 目录，支持按名称注入技能文档。
+├── skills/                                            根级 Skills 目录，每个子目录为一个 Skill（含 SKILL.md）。
 ├── start.py                                           项目统一启动脚本，负责加载配置、初始化日志并启动 Uvicorn。
 └── tests/                                             单元测试与集成测试目录。
 ```
@@ -161,27 +145,6 @@ app/
     ├── session_cleanup_service.py                     会话级联删除服务。
     ├── session_service.py                             会话创建、查询视图、消息计数。
     └── task_service.py                                Task CRUD 业务服务。
-```
-
-### `docs/`
-
-```text
-docs/
-├── claude-code-learned.md                             Claude Code 使用经验记录。
-├── claude-code-work/                                  Claude Code 工作模式文档系列。
-│   ├── 01-overview.md
-│   ├── 02-agent-loop.md
-│   ├── ...
-│   └── reference.md
-└── superpowers/                                       superpowers 工作流文档。
-    ├── plans/                                         实施计划。
-    │   ├── 2026-04-30-multi-agent-task-implementation.md
-    │   ├── 2026-04-30-session-storage-refactor.md
-    │   └── 2026-05-06-multi-agent-context-summary-refactor-implementation.md
-    └── specs/                                         设计规格。
-        ├── 2026-04-30-multi-agent-task-design.md
-        ├── 2026-04-30-session-storage-multi-agent-design.md
-        └── 2026-05-06-multi-agent-context-summary-refactor-design.md
 ```
 
 ### `tests/`
@@ -397,3 +360,70 @@ start.py / uvicorn --factory
 -> app/bootstrap/container.py
 -> app/main.py
 ```
+
+## 部署指南
+
+### 前置要求
+
+- Python 3.12+
+- Redis 服务（本地或远程均可）
+- Git
+
+### 快速部署
+
+```bash
+# 1. 克隆项目
+git clone https://github.com/w-tao-hub/EAgentBase.git
+cd EAgentBase
+
+# 2. 创建虚拟环境
+python3.12 -m venv .venv
+
+# 3. 安装项目依赖
+.venv/bin/pip install --upgrade pip
+.venv/bin/pip install -e .
+
+# 4. 配置环境变量
+cp .env.example .env
+
+# 5. 启动服务
+.venv/bin/python start.py
+```
+
+服务默认运行在 `http://localhost:8000`，访问 `/docs` 可查看 Swagger API 文档。
+
+## 使用指南
+
+本项目为骨架式设计，企业可根据业务需求进行扩展。推荐以下开发路径：
+
+### 第一步：开发定制化 Tool
+
+Tool 是智能体的"双手"，负责执行具体动作（查数据库、调用外部 API、操作文件等）。
+
+> 提示：在 `app/infra/tools/` 下新建文件，继承 `Tool` 基类，实现 `call()` 方法，然后在 `ToolRegistry` 中注册。参考 `task_tool.py` 的实现风格。
+
+### 第二步：开发定制化 Hook
+
+Hook 允许你在 LLM 调用前后、工具执行前后插入自定义逻辑（日志、监控、数据脱敏等）。
+
+> 提示：在 `app/core/hooks/` 下新建文件，继承 `ModelHook` 或 `ToolHook` 基类，然后注册到 Hook 管线中。参考 `persist_large_tool_result_hook.py` 的实现。
+
+### 第三步：配置 MCP 与 Skill
+
+MCP 用于接入外部工具服务（数据库、文件系统、Web 等），Skill 用于注入领域知识和技能文档。
+
+> **MCP 配置**：编辑 `mcp_servers.json`，按 `mcp_servers.json.example` 的格式添加 MCP 服务端配置，重启后自动生效。
+>
+> **Skill 添加**：在 `skills/` 目录下放置领域知识文档（Markdown 格式），框架会自动扫描索引，智能体按需加载。
+
+### 第四步：定制子代理
+
+针对特定场景配置专用子代理，分配不同的模型、提示词和 Hook 组合。
+
+> 提示：在 `agents/` 目录下创建 `.md` 文件定义子代理配置，或直接在 `app/infra/agents/default_sub_agents/definitions.py` 中添加声明式配置。
+
+### 第五步：调整系统提示词
+
+修改主智能体的行为风格、约束规则等。
+
+> 提示：编辑 `app/infra/agents/master_prompt.md`，调整主智能体的 system prompt。```

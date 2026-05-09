@@ -13,8 +13,10 @@ import uuid  # 导入 UUID 模块，用于生成 child run ID
 
 from app.config import Settings  # 导入应用配置
 from app.core.loop.agent_loop import AgentLoop  # 导入 AgentLoop 编排器
-from app.core.models.agent import AgentExecutionProfile  # 导入执行配置类型
+from app.core.models.agent import Agent, AgentExecutionProfile  # 导入执行配置类型
 from app.core.models.error import ErrorCode  # 导入错误码枚举
+from app.core.models.tool import Tool, ToolRegistry  # 导入工具模型和注册表
+from app.infra.agents.profile_builder import CHILD_FILTERED_TOOL_NAMES  # 导入主控工具名称集合，用于动态过滤
 from app.core.models.event import (  # 导入事件模型
     AssistantWithToolsEvent,  # 带工具调用的 assistant 消息事件
     MessageDeltaEvent,  # 流式文本增量事件
@@ -57,6 +59,9 @@ class ChildAgentRunner:
     4. 消费 child AgentLoop 事件并写入隔离的 child 上下文
     """
 
+    # 通用子代理名称常量，匹配此名称时支持动态 tools 覆盖
+    _GENERIC_AGENT_NAME = "Worker"
+
     def __init__(
         self,
         *,
@@ -66,6 +71,7 @@ class ChildAgentRunner:
         agent_loop: AgentLoop,  # AgentLoop 编排器，用于驱动 child 执行
         child_profiles: dict[str, AgentExecutionProfile],  # 已注册的 child profile 映射表
         settings: Settings,  # 应用配置
+        tool_catalog: dict[str, Tool] | None = None,  # 全局工具目录，用于动态构建子代理工具列表
         context_trim_policy=None,  # 可选的上下文裁剪策略，默认使用 NoTrimPolicy
     ) -> None:
         """初始化 ChildAgentRunner。
@@ -77,6 +83,7 @@ class ChildAgentRunner:
             agent_loop: AgentLoop 编排器实例
             child_profiles: 按 subagent_type 索引的 child profile 字典
             settings: 应用配置对象
+            tool_catalog: 全局工具目录，用于动态构建子代理工具列表
             context_trim_policy: 上下文裁剪策略，默认 NoTrimPolicy
         """
         self._session_store = session_store  # 保存会话存储引用
@@ -85,6 +92,7 @@ class ChildAgentRunner:
         self._agent_loop = agent_loop  # 保存 AgentLoop 引用
         self._child_profiles = child_profiles  # 保存 child profile 映射表
         self._settings = settings  # 保存应用配置
+        self._tool_catalog = tool_catalog or {}  # 保存全局工具目录，用于动态构建工具列表
         self._context_trim_policy = context_trim_policy or NoTrimPolicy()  # 保存上下文裁剪策略，默认不裁剪
         self._child_locks: dict[tuple[str, str], asyncio.Lock] = {}  # 同一 session_id + child_id 的 child 执行必须串行
 
@@ -97,9 +105,11 @@ class ChildAgentRunner:
         subagent_type: str,  # 子代理类型（大小写敏感，如 "Plan"）
         child_id: str,  # child 的会话内稳定标识符
         prompt: str,  # child 的初始任务 prompt
+        description: str,  # child 的任务描述
         metadata: dict | None,  # 可选的请求元数据
         cancel_event: asyncio.Event | None,  # 可选的外部取消事件
         is_resume: bool = False,  # 是否为恢复已有 child 上下文
+        tool_names: tuple[str, ...] | None = None,  # 可选的动态工具列表，仅对通用子代理生效
     ) -> ChildAgentRunResult:
         """执行一次 child run。
 
@@ -119,6 +129,7 @@ class ChildAgentRunner:
             subagent_type: 子代理类型
             child_id: child 稳定标识
             prompt: 任务 prompt
+            description: 任务描述，用于写入 child 摘要
             metadata: 请求元数据
             cancel_event: 外部取消事件
             is_resume: 是否为 resume 模式
@@ -130,6 +141,9 @@ class ChildAgentRunner:
             ValueError: 当 profile 不存在、resume 校验失败、或 child 执行失败时
         """
         profile = self._get_child_profile(subagent_type)  # 按 subagent_type 获取 profile（大小写敏感，未命中抛 UNKNOWN_SUBAGENT）
+        # 通用子代理动态工具覆盖：当代理名称匹配且传入 tool_names 时，构建动态 profile
+        if subagent_type == self._GENERIC_AGENT_NAME and tool_names is not None:
+            profile = self._build_dynamic_profile(profile, tool_names)
         lock = self._child_locks.setdefault((session_id, child_id), asyncio.Lock())
         async with lock:  # 同一 child 上下文必须串行推进，保证 resume 语义线性一致
             await self._ensure_resume_matches_subagent(session_id, child_id, subagent_type, is_resume=is_resume)  # 校验 resume 一致性
@@ -162,7 +176,6 @@ class ChildAgentRunner:
                 run_id=child_run_id,
                 created_at_ts=created_at.timestamp(),
             )
-            self._session_store.queue_add_session_child(pipeline, session_id, child_id)
             await pipeline.execute()
 
             try:
@@ -187,13 +200,24 @@ class ChildAgentRunner:
                 if context_result.history_dirty:
                     await self._session_store.mark_child_history_dirty(session_id, child_id)
 
-                await self._session_store.append_child_message(
+                # 将首条 user message 落库与摘要写入合并为一次 pipeline，减少 Redis 往返
+                pipeline = self._redis.pipeline()
+                self._session_store.queue_append_child_message(
+                    pipeline,
                     session_id=session_id,
                     child_id=child_id,
                     message=user_message,
                     source_run_id=child_run_id,
                     subagent_type=subagent_type,
                 )
+                self._session_store.queue_upsert_session_child_summary(
+                    pipeline,
+                    session_id=session_id,
+                    child_id=child_id,
+                    subagent_type=subagent_type,
+                    description=description,
+                )
+                await pipeline.execute()
 
                 output = await self._consume_child_loop(
                     session_id=session_id,
@@ -268,6 +292,43 @@ class ChildAgentRunner:
             return self._child_profiles[subagent_type]  # 大小写敏感的字典查找
         except KeyError as exc:  # 未找到时抛出带稳定错误码的异常
             raise ValueError(f"{ErrorCode.UNKNOWN_SUBAGENT.value}: {subagent_type}") from exc  # 包含子代理类型名便于调试
+
+    def _build_dynamic_profile(
+        self,
+        base_profile: AgentExecutionProfile,
+        tool_names: tuple[str, ...],
+    ) -> AgentExecutionProfile:
+        """基于基础 profile 构建动态 profile，使用指定的工具列表。
+
+        Args:
+            base_profile: 子代理的基础执行配置
+            tool_names: 要注册的工具名称列表
+
+        Returns:
+            新的 AgentExecutionProfile 实例，包含动态构建的工具注册表
+        """
+        registry = ToolRegistry()  # 创建空的工具注册表
+        for tool_name in tool_names:  # 遍历工具名称列表
+            if tool_name in CHILD_FILTERED_TOOL_NAMES:  # 主控工具自动过滤，防止递归
+                continue
+            tool = self._tool_catalog.get(tool_name)  # 从全局工具目录查找
+            if tool is None:  # 工具不存在时报错
+                raise ValueError(
+                    f"{ErrorCode.INVALID_SUBAGENT_CONFIG.value}: 未知工具: {tool_name}"
+                )
+            registry.register(tool)  # 注册工具
+
+        return AgentExecutionProfile(
+            agent_id=base_profile.agent_id,
+            agent=base_profile.agent,
+            prompt_source=base_profile.prompt_source,
+            runtime=base_profile.runtime,
+            tool_registry=registry,
+            tool_hook_pipeline=base_profile.tool_hook_pipeline,
+            max_turns=base_profile.max_turns,
+            skills=base_profile.skills,
+            extra_system_messages=base_profile.extra_system_messages,
+        )
 
     async def _ensure_resume_matches_subagent(
         self, session_id: str, child_id: str, subagent_type: str, *, is_resume: bool = False
@@ -344,6 +405,7 @@ class ChildAgentRunner:
             agent=profile.agent,  # child Agent 配置
             cancel_event=cancel_event or asyncio.Event(),  # 外部取消事件或新的默认事件
             run_type="child",  # 标记为 child 类型
+            child_id=child_id,  # 传入 child 标识符，用于 plan/task 隔离
         )
         async for event in self._agent_loop.run(  # 驱动 AgentLoop 执行
             run_id=child_run_id,  # child run ID

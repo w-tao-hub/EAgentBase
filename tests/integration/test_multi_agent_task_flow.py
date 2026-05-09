@@ -25,7 +25,8 @@ from app.core.models.session import Session  # 导入 Session 模型
 from app.core.models.tool import ToolRegistry  # 导入工具注册表
 from app.core.runtime.agent_runtime import Function, ToolCall, TurnComplete  # 导入运行时类型
 from app.infra.store.redis_run_store import RedisRunStore  # 导入 Redis Run 存储
-from app.infra.store.redis_session_store import RedisSessionStore  # 导入 Redis 会话存储
+from app.infra.store.redis_session_store import RedisSessionStore, SessionChildSummary  # 导入 Session 存储和 child 摘要数据类
+from app.infra.tools.list_resumable_subagents_tool import ListResumableSubagentsTool  # 导入可恢复子代理查询工具
 from app.infra.tools.task_tool import TaskTool  # 导入 Task 工具
 from app.services.chat_event_processor import ChatEventProcessor  # 导入聊天事件分发器
 from app.services.child_agent_runner import ChildAgentRunner  # 导入子代理执行服务
@@ -306,6 +307,7 @@ async def test_different_child_contexts_are_isolated(fake_redis):
         subagent_type="Plan",  # 子代理类型
         child_id="plan-child-a",  # child 稳定标识（手动指定，便于验证）
         prompt="分析需求 A",  # 任务 prompt
+        description="分析需求 A",  # 任务描述
         metadata=None,  # 无请求元数据
         cancel_event=None,  # 无外部取消事件
     )
@@ -341,6 +343,7 @@ async def test_different_child_contexts_are_isolated(fake_redis):
         subagent_type="Plan",  # 子代理类型
         child_id="plan-child-b",  # child 稳定标识（手动指定，与 A 不同）
         prompt="分析需求 B",  # 任务 prompt
+        description="分析需求 B",  # 任务描述
         metadata=None,  # 无请求元数据
         cancel_event=None,  # 无外部取消事件
     )
@@ -368,3 +371,92 @@ async def test_different_child_contexts_are_isolated(fake_redis):
     assert "需求 B" not in content_a_full, "child A 的上下文不应包含需求 B 的内容"
     # child B 不应包含 child A 特有的内容
     assert "需求 A" not in content_b_full, "child B 的上下文不应包含需求 A 的内容"
+
+
+@pytest.mark.asyncio
+async def test_resumable_subagent_query_returns_latest_description(fake_redis):
+    """测试首次派发与 resume 后，查询工具返回同一 child 的最新 description。"""
+    session_store = RedisSessionStore(fake_redis, key_prefix="test")
+    run_store = RedisRunStore(fake_redis, key_prefix="test")
+    await session_store.create_session(
+        Session(
+            session_id="session-query",
+            agent_id="master-agent",
+            created_at=datetime.now(timezone.utc),
+        )
+    )
+
+    runtime = FakeAgentRuntime(turn_results=[["第一次输出", TurnComplete()], ["第二次输出", TurnComplete()]])
+    child_agent = Agent(
+        agent_id="Plan",
+        name="Plan",
+        model="gpt-4.1-mini",
+        system_prompt="你是计划代理。",
+        temperature=0.2,
+    )
+    child_profile = AgentExecutionProfile(
+        agent_id="Plan",
+        agent=child_agent,
+        prompt_source=AgentPromptSource(kind="file", path="plan.md"),
+        runtime=runtime,
+        tool_registry=ToolRegistry(),
+        tool_hook_pipeline=ToolHookPipeline(),
+        max_turns=3,
+    )
+    runner = ChildAgentRunner(
+        session_store=session_store,
+        run_store=run_store,
+        redis=fake_redis,
+        agent_loop=AgentLoop(),
+        child_profiles={"Plan": child_profile},
+        settings=Settings(redis_url="redis://localhost:6379/0"),
+    )
+
+    await runner.run_child(
+        session_id="session-query",
+        parent_run_id="master-run-1",
+        tool_call_id="call-1",
+        subagent_type="Plan",
+        child_id="plan-query",
+        prompt="第一次任务",
+        description="第一次描述",
+        metadata=None,
+        cancel_event=None,
+    )
+    await runner.run_child(
+        session_id="session-query",
+        parent_run_id="master-run-2",
+        tool_call_id="call-2",
+        subagent_type="Plan",
+        child_id="plan-query",
+        prompt="第二次任务",
+        description="第二次描述",
+        metadata=None,
+        cancel_event=None,
+        is_resume=True,
+    )
+
+    summaries = await session_store.list_session_child_summaries("session-query")
+
+    assert summaries == [
+        SessionChildSummary(
+            resume_id="plan-query",
+            subagent_type="Plan",
+            description="第二次描述",
+        )
+    ]
+
+    # 通过 ListResumableSubagentsTool 验证完整工具链路输出
+    list_tool = ListResumableSubagentsTool(session_store)
+    tool_context = ExecutionContext(
+        run_id="verify-run",
+        session_id="session-query",
+        metadata=None,
+        agent=child_agent,
+        run_type="master",
+    )
+    tool_result = await list_tool.call({}, tool_context)
+    items = json.loads(tool_result.content)["items"]
+    assert items == [
+        {"resume_id": "plan-query", "subagent_type": "Plan", "description": "第二次描述"},
+    ]

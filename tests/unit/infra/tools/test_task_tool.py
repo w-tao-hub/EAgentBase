@@ -210,9 +210,9 @@ async def test_task_tool_rejects_missing_tool_call_id() -> None:
 
 @pytest.mark.asyncio  # 标记为异步测试
 async def test_task_tool_rejects_missing_required_params() -> None:
-    """测试缺少 subagent_type 或 prompt 时返回错误。
+    """测试缺少 description、subagent_type 或 prompt 时返回错误。
 
-    subagent_type 和 prompt 是 TaskTool 的必填参数，
+    description、subagent_type 和 prompt 是 TaskTool 的必填参数，
     缺少任一参数时应在执行前返回明确的错误。
     """
     tool = TaskTool(FakeChildRunner())  # 创建被测试的 TaskTool 实例
@@ -232,7 +232,7 @@ async def test_task_tool_rejects_missing_required_params() -> None:
         base_context,  # 合法上下文
     )
     assert result.is_error is True  # 应该返回错误
-    assert "缺少 subagent_type 或 prompt" in result.content  # 确认错误消息
+    assert "缺少 description、subagent_type 或 prompt" in result.content  # 确认错误消息
 
     # 场景 2：prompt 为空字符串
     result = await tool.call(  # 调用 Task 工具
@@ -240,4 +240,70 @@ async def test_task_tool_rejects_missing_required_params() -> None:
         base_context,  # 合法上下文
     )
     assert result.is_error is True  # 应该返回错误
-    assert "缺少 subagent_type 或 prompt" in result.content  # 确认错误消息
+    assert "缺少 description、subagent_type 或 prompt" in result.content  # 确认错误消息
+
+    # 场景 3：description 为空字符串
+    result = await tool.call(  # 调用 Task 工具
+        {"description": "", "prompt": "请制定实施计划", "subagent_type": "Plan"},  # 空 description
+        base_context,  # 合法上下文
+    )
+    assert result.is_error is True  # 应该返回错误
+    assert "缺少 description、subagent_type 或 prompt" in result.content  # 确认错误消息
+
+
+@pytest.mark.asyncio  # 标记为异步测试
+async def test_task_tool_passes_description_to_child_runner() -> None:
+    """测试 TaskTool 会把 description 透传给 ChildAgentRunner。"""
+    runner = FakeChildRunner()  # 创建 fake runner
+    tool = TaskTool(runner)  # 创建被测试的 TaskTool 实例
+    context = ExecutionContext(  # 构造 master 执行上下文
+        run_id="master-run",  # master run ID
+        session_id="session-1",  # 会话 ID
+        metadata=None,  # 无额外元数据
+        agent=create_fake_agent(),  # 假 Agent 实例
+        run_type="master",  # master 类型，满足非 child 检查
+        tool_call_id="call-1",  # 合法的 tool_call_id
+        tool_name="Task",  # 当前工具名
+    )
+
+    await tool.call(  # 调用 Task 工具
+        {
+            "description": "继续分析目录结构",  # 任务描述
+            "prompt": "请继续分析 app 目录",  # 任务 prompt
+            "subagent_type": "Plan",  # 子代理类型
+            "resume": "plan-existing",  # 已有的 child_id
+        },
+        context,  # 合法上下文
+    )
+
+    assert runner.last_call["description"] == "继续分析目录结构"  # 验证 description 正确透传
+
+
+@pytest.mark.asyncio  # 标记为异步测试
+async def test_task_tool_records_description_on_resume_failure() -> None:
+    """测试 resume 校验失败时 description 仍被记录到 runner kwargs。"""
+    runner = FakeChildRunner()  # 创建 fake runner
+    runner.raise_on_resume = True  # 启用 resume 失败模拟
+    tool = TaskTool(runner)  # 创建被测试的 TaskTool 实例
+    context = ExecutionContext(  # 构造 master 执行上下文
+        run_id="master-run",  # master run ID
+        session_id="session-1",  # 会话 ID
+        metadata=None,  # 无额外元数据
+        agent=create_fake_agent(),  # 假 Agent 实例
+        run_type="master",  # master 类型
+        tool_call_id="call-1",  # 合法的 tool_call_id
+        tool_name="Task",  # 当前工具名
+    )
+
+    result = await tool.call(  # 调用 Task 工具（预期返回错误）
+        {
+            "description": "失败的恢复描述",  # 任务描述
+            "prompt": "请继续",  # 任务 prompt
+            "subagent_type": "Plan",  # 子代理类型
+            "resume": "plan-nonexistent",  # 不存在的 child_id
+        },
+        context,  # 合法上下文
+    )
+
+    assert result.is_error is True  # 工具应返回错误
+    assert runner.last_call["description"] == "失败的恢复描述"  # description 仍应被记录

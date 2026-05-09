@@ -1,6 +1,6 @@
-"""任务更新工具实现。
+"""计划更新工具实现。
 
-提供 TaskUpdateTool，负责更新当前会话中的任务字段与状态。
+提供 PlanUpdateTool，负责更新当前会话中的计划任务字段与状态。
 """
 
 from __future__ import annotations  # 启用未来注解
@@ -14,11 +14,11 @@ if TYPE_CHECKING:  # 仅在类型检查时导入，避免循环依赖
     from app.core.models.execution_context import ExecutionContext
 
 
-class TaskUpdateTool(Tool):
-    """更新任务工具。"""
+class PlanUpdateTool(Tool):
+    """更新计划任务工具。"""
 
     def __init__(self, task_service: TaskService) -> None:
-        """初始化更新任务工具。
+        """初始化更新计划任务工具。
 
         Args:
             task_service: 任务业务服务实例。
@@ -28,7 +28,7 @@ class TaskUpdateTool(Tool):
     @property
     def name(self) -> str:
         """工具标识符。"""
-        return "task_update"
+        return "plan_update"
 
     @property
     def description(self) -> str:
@@ -119,7 +119,7 @@ class TaskUpdateTool(Tool):
 
         try:
             result = await self._task_service.update_task(
-                session_id=context.session_id,
+                session_id=context.resolve_plan_session_id(),
                 task_id=task_id,
                 subject=input.get("subject"),
                 description=input.get("description"),

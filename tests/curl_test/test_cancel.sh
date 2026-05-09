@@ -458,7 +458,7 @@ test_post_subagent_cancel_chat() {
     [ "$last_event" = "run_completed" ] && pass "新对话 SSE 以 run_completed 结束" || info "last_event=$last_event"
 
     # ---- 第三步：验证子代理上下文仍完整保留 ----
-    local child_ids=$(redis_cmd "smembers('$(redis_key session_child "$sid")')")
+    local child_ids=$(redis_cmd "hkeys('$(redis_key session_child "$sid")')")
     local child_count=$(echo "$child_ids" | jq 'length' 2>/dev/null || echo 0)
     info "保留的子代理数: $child_count"
     [ "$child_count" -gt 0 ] && pass "子代理上下文未被清除" || info "无子代理上下文"
@@ -482,8 +482,8 @@ test_post_subagent_cancel_chat() {
 # ============================================================
 extract_child_id() {
     local sid="$1"
-    # 优先从 session_children 集合读取
-    local cid=$(redis_cmd "smembers('$(redis_key session_child "$sid")')" | jq -r '.[0] // ""' 2>/dev/null || echo "")
+    # 优先从 session_children 哈希索引读取 field（即 child_id）
+    local cid=$(redis_cmd "hkeys('$(redis_key session_child "$sid")')" | jq -r '.[0] // ""' 2>/dev/null || echo "")
     if [ -n "$cid" ]; then
         echo "$cid"
         return 0

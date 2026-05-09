@@ -8,7 +8,9 @@
 
 当前能力边界：
 
-- 已实现：`POST /sessions`、`GET /sessions/{session_id}`、`POST /chat`、`POST /runs/{run_id}/cancel`、`GET /runs/{run_id}`、SSE 流式输出、Redis 会话持久化、会话单活跃运行锁与心跳、健康检查、日志系统、启动脚本、Tool 系统（Task 子代理派发、Task CRUD、Skill、MCP 适配、大结果持久化与查询、Python 脚本执行）、Agent Loop 多轮编排、Hook 系统、子代理执行服务（ChildAgentRunner）、子代理配置加载（默认 Plan + 自定义 md）、子代理上下文隔离、取消控制（API 取消 + SSE 断链取消 + 跨进程 Redis 广播取消）、上下文摘要压缩、用户消息元数据。
+- 已实现：`POST /sessions`、`GET /sessions/{session_id}`、`POST /chat`、`POST /runs/{run_id}/cancel`、`GET /runs/{run_id}`、SSE 流式输出、Redis 会话持久化、会话单活跃运行锁与心跳、健康检查、日志系统、启动脚本、Tool 系统（Task 子代理派发、Plan CRUD、Skill、MCP 适配、大结果持久化与查询、Python 脚本执行）、Agent Loop 多轮编排、Hook 系统、子代理执行服务（ChildAgentRunner，支持动态工具注入）、子代理配置加载（默认 Worker + 自定义 md）、子代理上下文隔离与 session 级命名空间隔离（plan/task）、可恢复子代理列表查询（ListResumableSubagents）、取消控制（API 取消 + SSE 断链取消 + 跨进程 Redis 广播取消）、上下文摘要压缩、用户消息元数据。
+
+- 通用智能体（Worker）：默认子代理。支持主代理动态指定可用工具列表，可执行包括所有工具在内的多样化任务。采用简化提示词设计，无领域约束，适配各类开发场景。支持 resume 恢复执行，支持 session 级命名空间隔离。可自行修改 Worker 智能体除工具列表外的其余参数。
 
 ## 目录与文件职责
 
@@ -41,7 +43,7 @@ app/
 ├── config.py                                          `Settings` 定义；统一收口运行、Redis、日志、CORS、Uvicorn、主智能体配置。
 ├── bootstrap/                                         组合根目录，负责依赖装配。
 │   ├── __init__.py                                    包标记。
-│   ├── container.py                                   唯一组合根；装配 Redis store、AgentProvider、服务层与运行时依赖。
+│   ├── container.py                                   唯一组合根；装配 Redis store、AgentProvider、服务层、Plan CRUD 工具、ListResumableSubagentsTool 与运行时依赖。
 │   └── factory.py                                     公开无参启动入口，支持 `uvicorn app.bootstrap.factory:bootstrap_app --factory`。
 ├── core/                                              核心领域与运行时目录。
 │   ├── __init__.py                                    核心层包标记。
@@ -58,7 +60,7 @@ app/
 │   │   ├── agent.py                                   `Agent` 领域模型与 `AgentExecutionProfile` 执行配置。
 │   │   ├── error.py                                   `ErrorCode` 与 `AppError` 定义。
 │   │   ├── event.py                                   SSE/运行链路中的事件模型定义。
-│   │   ├── execution_context.py                       `ExecutionContext`，透传给 Hook 和 Tool 的运行上下文。
+│   │   ├── execution_context.py                       `ExecutionContext`，透传给 Hook/Tool 的运行上下文，含 child_id 与 plan 隔离命名空间。
 │   │   ├── llm_chunk.py                               `LLMChunk` 模型。
 │   │   ├── run.py                                     `Run` 与 `RunStatus` 模型。
 │   │   ├── session.py                                 `Session` 领域模型。
@@ -82,11 +84,11 @@ app/
 │   │   ├── master_prompt.md                           主智能体系统提示词文件。
 │   │   ├── default_sub_agents/                        默认子代理配置与 prompt 资源目录。
 │   │   │   ├── __init__.py                            包标记。
-│   │   │   ├── definitions.py                         默认子代理 Python 声明式配置。
-│   │   │   └── plan.md                                默认 Plan 子代理系统提示词。
+│   │   │   ├── definitions.py                         默认子代理 Python 声明式配置（默认 Worker 子代理）。
+│   │   │   └── worker.md                              默认 Worker 子代理系统提示词。
 │   │   ├── custom_sub_agent_loader.py                 自定义 md 子代理加载器。
 │   │   ├── hook_profiles.py                           子代理可引用的预注册 Hook 组。
-│   │   └── profile_builder.py                         将默认/自定义配置组装成 AgentExecutionProfile。
+│   │   └── profile_builder.py                         将默认/自定义配置组装成 AgentExecutionProfile，自动过滤主控工具（Task/ListResumableSubagents）。
 │   ├── llm/                                           大模型调用适配目录。
 │   │   ├── __init__.py                                包标记。
 │   │   └── litellm_adapter.py                         LiteLLM 适配器；流式调用和 chunk 归一化，支持 tools 参数。
@@ -100,11 +102,12 @@ app/
 │   │   ├── __init__.py                                包标记。
 │   │   ├── mcp_adapter.py                             MCP 协议适配器。
 │   │   ├── mcp_client_manager.py                      MCP 客户端生命周期管理器。
-│   │   ├── task_tool.py                               Task 派发工具，master 通过此工具同步派发子代理。
-│   │   ├── task_create_tool.py                        任务创建工具。
-│   │   ├── task_get_tool.py                           任务查询工具。
-│   │   ├── task_list_tool.py                          任务列表工具。
-│   │   ├── task_update_tool.py                        任务更新工具。
+│   │   ├── task_tool.py                               Task 派发工具，master 通过此工具同步派发子代理，支持动态工具注入（Worker）。
+│   │   ├── plan_create_tool.py                        计划创建工具。
+│   │   ├── plan_get_tool.py                           计划查询工具。
+│   │   ├── plan_list_tool.py                          计划列表工具。
+│   │   ├── plan_update_tool.py                        计划更新工具。
+│   │   ├── list_resumable_subagents_tool.py           可恢复子代理列表查询工具。
 │   │   ├── skill_tool.py                              Skill 加载工具。
 │   │   ├── query_tool_result_tool.py                  大工具结果分页查询工具。
 │   │   └── run_python_script_tool.py                  项目内 Python 脚本执行工具。
@@ -112,7 +115,7 @@ app/
 │       ├── __init__.py                                统一导出全部 Store。
 │       ├── redis_lock_store.py                        会话分布式锁实现（SET NX EX + 心跳续期）。
 │       ├── redis_run_store.py                         Run 持久化。
-│       ├── redis_session_store.py                     会话元数据、主/child 上下文消息、session 索引持久化。
+│       ├── redis_session_store.py                     会话元数据、主/child 上下文消息、session 索引持久化（Hash 结构），含 SessionChildSummary 可恢复子代理摘要。
 │       ├── redis_task_store.py                        Task 持久化。
 │       └── redis_tool_result_store.py                 大工具结果持久化。
 ├── interfaces/                                        接口适配层目录。
@@ -140,7 +143,7 @@ app/
     ├── chat_event_processor.py                        聊天事件分发器，负责事件落库和 Task 结果回填标记。
     ├── chat_run_lock.py                               聊天运行锁作用域（ChatRunLockScope），含心跳续期。
     ├── chat_service.py                                聊天主链路编排服务；会话校验、锁、Run、上下文、终态持久化、取消监听。
-    ├── child_agent_runner.py                          子代理执行服务；管理 child run、上下文隔离、取消传播。
+    ├── child_agent_runner.py                          子代理执行服务；管理 child run、上下文隔离、取消传播、动态工具注入（Worker）。
     ├── run_control_service.py                         Run 查询与取消控制。
     ├── session_cleanup_service.py                     会话级联删除服务。
     ├── session_service.py                             会话创建、查询视图、消息计数。
@@ -166,7 +169,10 @@ tests/
 │   └── mcp/                                           MCP 集成测试。
 │       └── test_mcp_real_server_smoke.py              MCP 真实服务冒烟测试。
 ├── curl_test/                                          curl 端到端测试。
-│   └── test_cancel.sh                                 取消功能端到端测试。
+│   ├── test_cancel.sh                                 取消功能端到端测试。
+│   ├── test_worker_chat.sh                            Worker 子代理对话 e2e 测试。
+│   ├── test_plan_isolation.sh                         Plan 隔离命名空间 e2e 测试。
+│   └── test_resumable_subagents.sh                    可恢复子代理 e2e 测试。
 └── unit/                                              单元测试。
     ├── test_config.py                                 配置读取测试。
     ├── test_logging_boundary.py                       日志边界测试。
@@ -191,7 +197,8 @@ tests/
     ├── infra/
     │   ├── agents/
     │   │   ├── test_master_agent_provider.py          主智能体提供者测试。
-    │   │   └── test_sub_agent_profiles.py             子代理 profile 测试。
+    │   │   ├── test_sub_agent_profiles.py             子代理 profile 测试。
+    │   │   └── test_profile_builder.py                ProfileBuilder 测试（含主控工具过滤）。
     │   ├── llm/test_litellm_adapter.py                LiteLLM 适配器测试。
     │   ├── logging/test_logger_manager.py             日志管理器测试。
     │   ├── tools/
@@ -200,8 +207,10 @@ tests/
     │   │   ├── test_python_script_tool.py             Python 脚本工具测试。
     │   │   ├── test_query_tool_result_tool.py         大结果查询工具测试。
     │   │   ├── test_skill_tool.py                     Skill 工具测试。
-    │   │   ├── test_task_tool.py                      TaskTool 测试。
-    │   │   └── test_task_tools.py                     Task CRUD 工具测试。
+    │   │   ├── test_task_tool.py                      TaskTool 测试（含动态 tools 注入）。
+    │   │   ├── test_task_tools.py                     Plan CRUD 工具测试。
+    │   │   ├── test_list_resumable_subagents_tool.py  ListResumableSubagentsTool 测试。
+    │   │   └── test_plan_scope.py                     Plan 隔离命名空间测试。
     │   └── store/
     │       ├── test_redis_lock_store.py               锁存储测试。
     │       ├── test_redis_run_store.py                Run 存储测试。
@@ -329,12 +338,17 @@ uvicorn app.bootstrap.factory:bootstrap_app --factory
 ```text
 AgentLoop 工具执行阶段
 -> TaskTool.call()
+   -> 可选：动态构建 Worker 子代理工具列表（tools 参数）
+   -> 生成 child_id 或复用 resume 中的 child_id
 -> ChildAgentRunner.run_child()
+   -> 校验 resume 一致性（subagent_type 与存储匹配）
    -> 创建 child Run（run_type=child, parent_run_id, child_id）
+   -> 通用子代理（Worker）支持动态工具注入（_build_dynamic_profile）
    -> 构建 child 上下文（从 child_context_messages 读取历史）
    -> AgentLoop.run() (child profile)
-     -> ContextBuilder.build (child 上下文隔离)
-   -> 结果写入 child_context_messages
+     -> ContextBuilder.build (child 上下文隔离，含 child_id)
+     -> plan/task 存储通过 ExecutionContext.resolve_plan_session_id() 隔离
+   -> 结果写入 child_context_messages + upsert child 摘要
    -> 更新 child run 终态
 -> 返回 ToolResult 给 master
 ```
@@ -422,8 +436,9 @@ MCP 用于接入外部工具服务（数据库、文件系统、Web 等），Ski
 
 > 提示：在 `agents/` 目录下创建 `.md` 文件定义子代理配置，或直接在 `app/infra/agents/default_sub_agents/definitions.py` 中添加声明式配置。
 
-### 第五步：调整系统提示词
+### 第五步：调整系统提示词 + 调整工具描述提示词
 
 修改主智能体的行为风格、约束规则等。
+修改工具描述以及工具参数描述规则。
 
 > 提示：编辑 `app/infra/agents/master_prompt.md`，调整主智能体的 system prompt。```

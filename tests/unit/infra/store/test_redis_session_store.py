@@ -253,14 +253,105 @@ async def test_session_store_can_manage_session_runs_and_children(fake_redis):
         "run-1",
         created_at=datetime(2026, 4, 30, 12, 3, 1, tzinfo=timezone.utc),
     )
-    await store.add_session_child("session-index", "child-b")
-    await store.add_session_child("session-index", "child-a")
-    await store.add_session_child("session-index", "child-a")
+    await store.upsert_session_child_summary("session-index", "child-b", subagent_type="", description="")
+    await store.upsert_session_child_summary("session-index", "child-a", subagent_type="", description="")
+    await store.upsert_session_child_summary("session-index", "child-a", subagent_type="", description="")
 
     assert await store.list_session_runs("session-index") == ["run-1", "run-2"]
     assert await store.list_session_run_ids("session-index") == ["run-1", "run-2"]
     assert await store.list_session_children("session-index") == ["child-a", "child-b"]
     assert await store.list_session_child_ids("session-index") == ["child-a", "child-b"]
+
+
+@pytest.mark.asyncio
+async def test_session_store_can_upsert_session_child_summaries(fake_redis):
+    """测试 session_children 会以 HASH 形式保存 child 摘要，并返回稳定排序。"""
+    store = RedisSessionStore(fake_redis, key_prefix="test")
+    session = Session(
+        session_id="session-index",
+        agent_id="agent-1",
+        created_at=datetime.now(timezone.utc),
+    )
+    await store.create_session(session)
+
+    await store.upsert_session_child_summary(
+        "session-index",
+        child_id="child-b",
+        subagent_type="Plan",
+        description="第二个子代理",
+    )
+    await store.upsert_session_child_summary(
+        "session-index",
+        child_id="child-a",
+        subagent_type="Worker",
+        description="第一个子代理",
+    )
+
+    summaries = await store.list_session_child_summaries("session-index")
+
+    assert [summary.resume_id for summary in summaries] == ["child-a", "child-b"]
+    assert summaries[0].subagent_type == "Worker"
+    assert summaries[0].description == "第一个子代理"
+    assert summaries[1].subagent_type == "Plan"
+    assert summaries[1].description == "第二个子代理"
+    assert await store.list_session_child_ids("session-index") == ["child-a", "child-b"]
+
+
+@pytest.mark.asyncio
+async def test_session_store_resume_updates_description_without_creating_duplicate_child(fake_redis):
+    """测试同一 child 重复 upsert 时只覆盖 description，不会新增重复项。"""
+    store = RedisSessionStore(fake_redis, key_prefix="test")
+    session = Session(
+        session_id="session-resume",
+        agent_id="agent-1",
+        created_at=datetime.now(timezone.utc),
+    )
+    await store.create_session(session)
+
+    await store.upsert_session_child_summary(
+        "session-resume",
+        child_id="plan-resume",
+        subagent_type="Plan",
+        description="第一次描述",
+    )
+    await store.upsert_session_child_summary(
+        "session-resume",
+        child_id="plan-resume",
+        subagent_type="Plan",
+        description="第二次描述",
+    )
+
+    summaries = await store.list_session_child_summaries("session-resume")
+
+    assert len(summaries) == 1
+    assert summaries[0].resume_id == "plan-resume"
+    assert summaries[0].subagent_type == "Plan"
+    assert summaries[0].description == "第二次描述"
+
+
+@pytest.mark.asyncio
+async def test_session_store_can_ensure_session_child_registered_without_wiping_summary(fake_redis):
+    """测试轻量登记 child 不会把已有 description 覆盖为空。"""
+    store = RedisSessionStore(fake_redis, key_prefix="test")
+    session = Session(
+        session_id="session-ensure",
+        agent_id="agent-1",
+        created_at=datetime.now(timezone.utc),
+    )
+    await store.create_session(session)
+
+    await store.upsert_session_child_summary(
+        "session-ensure",
+        child_id="plan-ensure",
+        subagent_type="Plan",
+        description="已有描述",
+    )
+    await store.ensure_session_child_registered("session-ensure", "plan-ensure")
+
+    summaries = await store.list_session_child_summaries("session-ensure")
+
+    assert len(summaries) == 1
+    assert summaries[0].description == "已有描述"
 
 
 @pytest.mark.asyncio

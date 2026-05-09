@@ -33,6 +33,15 @@ class ContextSummaryState:
     active_start_offset: int | None = None  # 活动窗口连续尾段的起始偏移；若无保留窗口则与摘要偏移相同。
 
 
+@dataclass(frozen=True, slots=True)
+class SessionChildSummary:
+    """表示当前 session 下一个可恢复子代理的最新摘要。"""
+
+    resume_id: str  # 子代理唯一标识
+    subagent_type: str  # 子代理类型，如 Plan、Worker
+    description: str  # 子代理的描述，用于 resume 时判断
+
+
 @dataclass(slots=True, frozen=True)
 class ContextKeySet:
     """同一条上下文消息流所需的 Redis key 组合。"""
@@ -89,7 +98,7 @@ class RedisSessionStore:
         return f"{self._key_prefix}:session_runs:{session_id}"
 
     def _session_children_key(self, session_id: str) -> str:
-        """生成 session 关联 child_id 集合的 Redis key。"""
+        """生成 session 关联 child 摘要哈希的 Redis key。"""
         return f"{self._key_prefix}:session_children:{session_id}"
 
     def _child_context_messages_key(self, session_id: str, child_id: str) -> str:
@@ -196,22 +205,96 @@ class RedisSessionStore:
         """按更直白的命名返回某个 session 关联的全部 run_id。"""
         return await self.list_session_runs(session_id)  # 提供别名，方便调用方逐步迁移。
 
-    async def add_session_child(self, session_id: str, child_id: str) -> None:
-        """向 session 的 child 索引中登记一个稳定 child_id。"""
-        await self._redis.sadd(self._session_children_key(session_id), child_id)  # 使用 SET 去重，避免同一 child 多次续跑产生重复成员。
+    async def ensure_session_child_registered(self, session_id: str, child_id: str) -> None:
+        """确保 session_children 中存在当前 child 的记录，但不破坏已有摘要。
 
-    def queue_add_session_child(self, pipeline: Any, session_id: str, child_id: str) -> None:
-        """向 pipeline 中排入一条 session_child 索引登记命令。"""
-        pipeline.sadd(self._session_children_key(session_id), child_id)
+        使用 HSETNX 原子写入，避免 TOCTOU 竞态条件。
+        """
+        key = self._session_children_key(session_id)
+        placeholder = SessionChildSummary(
+            resume_id=child_id,
+            subagent_type="",
+            description="",
+        )
+        await self._redis.hsetnx(key, child_id, self._serialize_session_child_summary(placeholder))
+
+    def queue_upsert_session_child_summary(
+        self,
+        pipeline: Any,
+        session_id: str,
+        child_id: str,
+        subagent_type: str,
+        description: str,
+    ) -> None:
+        """向 pipeline 中排入一条 child 摘要覆盖写命令。"""
+        summary = SessionChildSummary(
+            resume_id=child_id,
+            subagent_type=subagent_type,
+            description=description,
+        )
+        pipeline.hset(
+            self._session_children_key(session_id),
+            child_id,
+            self._serialize_session_child_summary(summary),
+        )
 
     async def list_session_children(self, session_id: str) -> list[str]:
         """列出某个 session 关联的全部 child_id。"""
-        child_ids = await self._redis.smembers(self._session_children_key(session_id))  # 先读取 Redis Set 中全部成员。
-        return sorted(child_ids)  # 测试与接口都更需要稳定顺序，因此在 Python 层统一排序。
+        child_ids = await self._redis.hkeys(self._session_children_key(session_id))  # 从 HASH 中读取全部 field 作为 child_id 列表。
+        return sorted(child_ids)  # 统一按字典序返回，保证接口输出稳定。
 
     async def list_session_child_ids(self, session_id: str) -> list[str]:
         """按更直白的命名返回某个 session 关联的全部 child_id。"""
         return await self.list_session_children(session_id)  # 提供别名，方便调用方逐步迁移。
+
+    async def upsert_session_child_summary(
+        self,
+        session_id: str,
+        child_id: str,
+        subagent_type: str,
+        description: str,
+    ) -> None:
+        """写入或覆盖 child 摘要，供首次派发和 resume 共用。"""
+        summary = SessionChildSummary(
+            resume_id=child_id,
+            subagent_type=subagent_type,
+            description=description,
+        )
+        await self._redis.hset(
+            self._session_children_key(session_id),
+            child_id,
+            self._serialize_session_child_summary(summary),
+        )
+
+    async def list_session_child_summaries(self, session_id: str) -> list[SessionChildSummary]:
+        """读取当前 session 下全部 child 摘要，并按 child_id 排序返回。"""
+        payload = await self._redis.hgetall(self._session_children_key(session_id))
+        summaries: list[SessionChildSummary] = []
+        for child_id in sorted(payload):
+            summaries.append(self._deserialize_session_child_summary(payload[child_id], fallback_child_id=child_id))
+        return summaries
+
+    @staticmethod
+    def _serialize_session_child_summary(summary: SessionChildSummary) -> str:
+        """把 child 摘要序列化为 JSON 字符串。"""
+        return json.dumps(
+            {
+                "resume_id": summary.resume_id,
+                "subagent_type": summary.subagent_type,
+                "description": summary.description,
+            },
+            ensure_ascii=False,
+        )
+
+    @staticmethod
+    def _deserialize_session_child_summary(payload: str, *, fallback_child_id: str) -> SessionChildSummary:
+        """把 Redis 中的 JSON 字符串反序列化为 child 摘要。"""
+        data = json.loads(payload)
+        return SessionChildSummary(
+            resume_id=str(data.get("resume_id") or fallback_child_id),
+            subagent_type=str(data.get("subagent_type") or ""),
+            description=str(data.get("description") or ""),
+        )
 
     async def get_main_message_count(self, session_id: str) -> int:
         """获取主会话上下文中的消息数量。"""
@@ -319,7 +402,7 @@ class RedisSessionStore:
         subagent_type 用于在 child 上下文消息中记录当前子代理的类型，
         后续 resume 校验时通过该字段判断 child_id 与 subagent_type 的一致性。
         """
-        await self.add_session_child(session_id, child_id)  # 只要某个 child 产生了上下文，就要确保它被登记到 session_children 索引。
+        await self.ensure_session_child_registered(session_id, child_id)  # 只要某个 child 产生了上下文，就要确保它被登记到 session_children 索引。
         await self._append_message_to_keys(
             self._child_context_keys(session_id, child_id),
             message,
@@ -380,7 +463,7 @@ class RedisSessionStore:
         active_start_offset: int | None = None,
     ) -> ContextSummaryState:
         """向指定 child 长期上下文追加摘要消息，并刷新摘要边界。"""
-        await self.add_session_child(session_id, child_id)  # child 摘要一旦存在，该 child 也必须可被 session_children 找到。
+        await self.ensure_session_child_registered(session_id, child_id)  # child 摘要一旦存在，该 child 也必须可被 session_children 找到。
         return await self._append_context_summary_to_keys(
             self._child_context_keys(session_id, child_id),
             message,
@@ -404,7 +487,7 @@ class RedisSessionStore:
 
     async def mark_child_history_dirty(self, session_id: str, child_id: str) -> None:
         """标记指定 child 长期上下文存在待修复历史。"""
-        await self.add_session_child(session_id, child_id)  # child 被打脏后，后续修复流程也必须能先枚举到这个 child。
+        await self.ensure_session_child_registered(session_id, child_id)  # child 被打脏后，后续修复流程也必须能先枚举到这个 child。
         await self._mark_history_dirty_by_keys(self._child_context_keys(session_id, child_id))  # 统一写入 child dirty key。
 
     async def is_child_history_dirty(self, session_id: str, child_id: str) -> bool:

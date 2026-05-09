@@ -19,8 +19,10 @@ from app.infra.agents.default_sub_agents import DefaultSubAgentDefinition
 from app.infra.agents.hook_profiles import HookProfileRegistry
 from app.infra.skills.catalog import SkillCatalog
 
-# Task 工具名称常量，child profile 中自动过滤此工具
+# 主控工具名称常量，child profile 中自动过滤这些工具
 TASK_TOOL_NAME = "Task"
+LIST_RESUMABLE_SUBAGENTS_TOOL_NAME = "ListResumableSubagents"
+CHILD_FILTERED_TOOL_NAMES = frozenset({TASK_TOOL_NAME, LIST_RESUMABLE_SUBAGENTS_TOOL_NAME})
 
 
 class SubAgentProfileBuilder:
@@ -32,8 +34,8 @@ class SubAgentProfileBuilder:
     - skills is None：不加载任何 skill 配置
     - skills == ()：显式配置为空 skill 集合
     - hook_profile is None：使用空 ToolHookPipeline()
-    - 包含 Task 的工具名自动过滤，不报错
-    - 未知非 Task 工具名报 INVALID_SUBAGENT_CONFIG
+    - 包含 Task/ListResumableSubagents 的工具名自动过滤，不报错
+    - 未知非主控的工具名报 INVALID_SUBAGENT_CONFIG
     - 不存在的 skill 静默跳过
     """
 
@@ -166,7 +168,7 @@ class SubAgentProfileBuilder:
             reasoning_effort=self._settings.master_agent_reasoning_effort,  # child agent 复用 master 思考强度
         )
         loaded_skills, skill_messages = self._load_skill_messages(skills)  # 加载已存在的 skill
-        registry = self._build_tool_registry(tools)  # 按名称组装工具注册表并过滤 Task
+        registry = self._build_tool_registry(tools)  # 按名称组装工具注册表并过滤主控工具
         return AgentExecutionProfile(
             agent_id=name,
             agent=agent,
@@ -201,10 +203,11 @@ class SubAgentProfileBuilder:
         return self._default_prompt_root / prompt_file  # 相对于默认子代理包目录解析
 
     def _build_tool_registry(self, tool_names: tuple[str, ...] | None) -> ToolRegistry:
-        """按名称组装 child 工具注册表，并自动过滤 Task。
+        """按名称组装 child 工具注册表，并自动过滤主控工具。
 
         tools is None 时返回空 ToolRegistry（不加载任何工具）。
-        Task 工具自动跳过不报错，未知非 Task 工具报 INVALID_SUBAGENT_CONFIG。
+        主控工具（Task、ListResumableSubagents 等）自动跳过不报错，
+        未知非主控工具报 INVALID_SUBAGENT_CONFIG。
 
         Args:
             tool_names: 工具名称元组，None 表示不加载
@@ -219,7 +222,7 @@ class SubAgentProfileBuilder:
         if tool_names is None:  # None 表示不加载任何工具
             return registry
         for tool_name in tool_names:  # 遍历工具名称列表
-            if tool_name == TASK_TOOL_NAME:  # Task 工具自动过滤，不报错
+            if tool_name in CHILD_FILTERED_TOOL_NAMES:  # 主控工具自动过滤，不报错
                 continue
             tool = self._tool_catalog.get(tool_name)  # 从全局目录查找工具实例
             if tool is None:  # 工具不存在时报错

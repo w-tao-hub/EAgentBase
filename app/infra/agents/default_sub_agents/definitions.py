@@ -25,12 +25,12 @@ class DefaultSubAgentDefinition:
 
 DEFAULT_SUB_AGENT_DEFINITIONS: tuple[DefaultSubAgentDefinition, ...] = (
     DefaultSubAgentDefinition(
-        name="Plan",
-        description="软件架构代理，用于设计实施方案",
-        prompt_file="plan.md",
-        tools=None,
+        name="Worker",
+        description="通用子代理，可执行主代理分派的复杂任务",
+        prompt_file="worker.md",
+        tools=(),
         skills=None,
-        max_turns=10,
+        max_turns=100,
         hook_profile=None,
         extra_system_messages=(),
     ),

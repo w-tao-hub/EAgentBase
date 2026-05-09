@@ -8,6 +8,7 @@ from __future__ import annotations  # 启用未来注解，避免前向引用问
 
 from datetime import datetime, timezone  # 导入日期时间类，用于构造时间戳
 import asyncio
+from unittest.mock import MagicMock  # 导入 MagicMock，用于构造最小 runner 依赖
 
 import pytest  # 导入 pytest 测试框架
 
@@ -18,8 +19,10 @@ from app.core.models.error import ErrorCode  # 导入错误码，用于断言取
 from app.core.runtime.agent_runtime import TurnComplete  # 导入 TurnComplete 标记，用于模拟 stream_once 返回
 from app.core.models.agent import Agent, AgentExecutionProfile, AgentPromptSource  # 导入 Agent 相关模型
 from app.core.models.run import Run, RunStatus  # 导入 Run 模型和状态枚举
+from app.core.models.session import Session  # 导入 Session 模型
 from app.core.models.stored_message import StoredMessage  # 导入存储消息模型
-from app.core.models.tool import ToolRegistry  # 导入空工具注册表
+from app.core.models.tool import Tool, ToolResult, ToolRegistry  # 导入工具基类、结果模型和注册表
+from app.core.models.execution_context import ExecutionContext  # 导入执行上下文
 from app.infra.store.redis_run_store import RedisRunStore  # 导入 Run 存储
 from app.infra.store.redis_session_store import RedisSessionStore  # 导入 Session 存储
 from app.services.child_agent_runner import ChildAgentRunner  # 导入被测试的 ChildAgentRunner
@@ -87,6 +90,7 @@ async def test_child_runner_persists_child_run_and_context(fake_redis) -> None:
         subagent_type="Plan",  # 子代理类型
         child_id="plan-abc",  # child 稳定标识
         prompt="请制定计划",  # 任务 prompt
+        description="制定计划测试",  # 任务描述
         metadata=None,  # 无额外元数据
         cancel_event=None,  # 无取消事件
     )
@@ -156,6 +160,7 @@ async def test_child_runner_rejects_resume_with_different_subagent_type(fake_red
             subagent_type="Other",  # 与已有类型不一致
             child_id="plan-abc",  # 已有 Plan 类型的 child_id
             prompt="新任务",  # 任务 prompt
+            description="测试",  # 任务描述
             metadata=None,  # 无额外元数据
             cancel_event=None,  # 无取消事件
         )
@@ -190,6 +195,7 @@ async def test_child_runner_rejects_resume_to_nonexistent_child(fake_redis) -> N
             subagent_type="Plan",  # 子代理类型
             child_id="plan-nonexistent",  # 不存在的 child_id
             prompt="新任务",  # 任务 prompt
+            description="测试",  # 任务描述
             metadata=None,  # 无额外元数据
             cancel_event=None,  # 无取消事件
             is_resume=True,  # 标记为 resume 模式
@@ -228,6 +234,7 @@ async def test_child_runner_marks_history_dirty(fake_redis) -> None:
         subagent_type="Plan",  # 子代理类型
         child_id="plan-abc",  # child 稳定标识
         prompt="请制定计划",  # 任务 prompt
+        description="制定计划测试",  # 任务描述
         metadata=None,  # 无额外元数据
         cancel_event=None,  # 无取消事件
     )
@@ -277,6 +284,7 @@ async def test_child_runner_marks_history_dirty_when_context_contains_orphan_too
         subagent_type="Plan",
         child_id="plan-abc",
         prompt="请制定计划",
+        description="测试",
         metadata=None,
         cancel_event=None,
         is_resume=True,
@@ -331,6 +339,7 @@ async def test_child_runner_handles_run_failed_event(fake_redis) -> None:
             subagent_type="Plan",  # 子代理类型
             child_id="plan-fail",  # child 稳定标识
             prompt="请制定计划",  # 任务 prompt
+            description="测试",  # 任务描述
             metadata=None,  # 无额外元数据
             cancel_event=None,  # 无取消事件
         )
@@ -362,6 +371,7 @@ async def test_child_runner_handles_run_cancelled_event(fake_redis) -> None:
             subagent_type="Plan",
             child_id="plan-cancelled",
             prompt="请制定计划",
+            description="测试",
             metadata=None,
             cancel_event=cancel_event,
         )
@@ -396,6 +406,7 @@ async def test_child_runner_accepts_valid_resume_and_appends_same_context(fake_r
         subagent_type="Plan",
         child_id="plan-resume",
         prompt="第一次任务",
+        description="测试描述",
         metadata=None,
         cancel_event=None,
     )
@@ -406,6 +417,7 @@ async def test_child_runner_accepts_valid_resume_and_appends_same_context(fake_r
         subagent_type="Plan",
         child_id="plan-resume",
         prompt="第二次任务",
+        description="测试描述",
         metadata=None,
         cancel_event=None,
         is_resume=True,
@@ -417,3 +429,196 @@ async def test_child_runner_accepts_valid_resume_and_appends_same_context(fake_r
     assert [message.content for message in messages if message.role == "user"] == ["第一次任务", "第二次任务"]
     assert any(message.content == "第一次输出" for message in messages if message.role == "assistant")
     assert any(message.content == "第二次输出" for message in messages if message.role == "assistant")
+
+
+@pytest.mark.asyncio
+async def test_child_agent_runner_writes_summary_and_updates_description_on_resume(fake_redis) -> None:
+    """测试首次派发写摘要，resume 只覆盖 description 不新增记录。"""
+    session_store = RedisSessionStore(fake_redis, key_prefix="test")
+    run_store = RedisRunStore(fake_redis, key_prefix="test")
+    runtime = FakeAgentRuntime(turn_results=[["第一次输出", TurnComplete()], ["第二次输出", TurnComplete()]])
+    profile = _plan_profile(runtime)
+    runner = ChildAgentRunner(
+        session_store=session_store,
+        run_store=run_store,
+        redis=fake_redis,
+        agent_loop=AgentLoop(),
+        child_profiles={"Plan": profile},
+        settings=Settings(redis_url="redis://localhost:6379/0"),
+    )
+
+    await runner.run_child(
+        session_id="session-1",
+        parent_run_id="master-run-1",
+        tool_call_id="call-1",
+        subagent_type="Plan",
+        child_id="plan-resume",
+        prompt="第一次任务",
+        description="第一次描述",
+        metadata=None,
+        cancel_event=None,
+    )
+    await runner.run_child(
+        session_id="session-1",
+        parent_run_id="master-run-2",
+        tool_call_id="call-2",
+        subagent_type="Plan",
+        child_id="plan-resume",
+        prompt="第二次任务",
+        description="第二次描述",
+        metadata=None,
+        cancel_event=None,
+        is_resume=True,
+    )
+
+    summaries = await session_store.list_session_child_summaries("session-1")
+
+    assert len(summaries) == 1
+    assert summaries[0].resume_id == "plan-resume"
+    assert summaries[0].subagent_type == "Plan"
+    assert summaries[0].description == "第二次描述"
+
+
+@pytest.mark.asyncio
+async def test_build_dynamic_profile_filters_child_filtered_tools():
+    """验证 _build_dynamic_profile 会过滤 Task 和 ListResumableSubagents。"""
+    tool_catalog: dict[str, Tool] = {"search": _create_stub_tool("search")}
+    profile = _plan_profile(FakeAgentRuntime())  # 使用现有的 profile 构造辅助函数
+
+    runner = ChildAgentRunner(
+        session_store=MagicMock(),
+        run_store=MagicMock(),
+        redis=MagicMock(),
+        agent_loop=MagicMock(),
+        child_profiles={"Plan": profile},
+        settings=MagicMock(),
+        tool_catalog=tool_catalog,
+    )
+
+    result = runner._build_dynamic_profile(
+        profile,
+        ("search", "Task", "ListResumableSubagents"),
+    )
+
+    tool_names = result.tool_registry.list_tools()
+    assert "search" in tool_names  # 非过滤工具应保留
+    assert "Task" not in tool_names  # Task 被过滤
+    assert "ListResumableSubagents" not in tool_names  # ListResumableSubagents 被过滤
+
+
+@pytest.mark.asyncio
+async def test_child_runner_failed_run_summary_still_written(fake_redis) -> None:
+    """验证 child run 失败后摘要仍然存在（Issue 1 修复：不误删有效摘要）。
+
+    当 child run 失败（RunFailedEvent）时，首条 user message 已在 append_child_message
+    落库，因此 upsert_session_child_summary 应该写入。失败不应导致摘要被删除。
+    """
+    session_store = RedisSessionStore(fake_redis, key_prefix="test")
+    run_store = RedisRunStore(fake_redis, key_prefix="test")
+    await session_store.create_session(
+        Session(session_id="session-fail", agent_id="master-agent", created_at=datetime.now(timezone.utc))
+    )
+
+    # raise_error=True 使 AgentLoop 抛出异常，触发 RunFailedEvent
+    runtime = FakeAgentRuntime(raise_error=True)
+    profile = _plan_profile(runtime)
+    runner = ChildAgentRunner(
+        session_store=session_store,
+        run_store=run_store,
+        redis=fake_redis,
+        agent_loop=AgentLoop(),
+        child_profiles={"Plan": profile},
+        settings=Settings(redis_url="redis://localhost:6379/0"),
+    )
+
+    with pytest.raises(ValueError, match="CHILD_AGENT_EXECUTION_FAILED"):
+        await runner.run_child(
+            session_id="session-fail",
+            parent_run_id="master-run",
+            tool_call_id="call-1",
+            subagent_type="Plan",
+            child_id="plan-fail",
+            prompt="分析任务",
+            description="失败场景摘要",
+            metadata=None,
+            cancel_event=None,
+        )
+
+    # 即使 run 失败，摘要也应在（因为 message 已落库）
+    summaries = await session_store.list_session_child_summaries("session-fail")
+    assert len(summaries) == 1
+    assert summaries[0].description == "失败场景摘要"
+
+
+@pytest.mark.asyncio
+async def test_child_runner_resume_wrong_type_preserves_old_summary(fake_redis) -> None:
+    """验证 resume 时 subagent_type 不匹配，已有摘要不会被删除或覆盖。
+
+    Issue 1 修复将摘要写入后置到 append_child_message 之后，且不包含异常回滚。
+    此测试保证 resume 校验失败时旧摘要不受影响。
+    """
+    session_store = RedisSessionStore(fake_redis, key_prefix="test")
+    run_store = RedisRunStore(fake_redis, key_prefix="test")
+    await session_store.create_session(
+        Session(session_id="session-type", agent_id="master-agent", created_at=datetime.now(timezone.utc))
+    )
+    runtime = FakeAgentRuntime(turn_results=[["输出", TurnComplete()]])
+    runner = ChildAgentRunner(
+        session_store=session_store,
+        run_store=run_store,
+        redis=fake_redis,
+        agent_loop=AgentLoop(),
+        child_profiles={"Plan": _plan_profile(runtime), "Worker": _plan_profile(FakeAgentRuntime())},
+        settings=Settings(redis_url="redis://localhost:6379/0"),
+    )
+
+    # 首次派发，写入摘要
+    await runner.run_child(
+        session_id="session-type",
+        parent_run_id="master-run-1",
+        tool_call_id="call-1",
+        subagent_type="Plan",
+        child_id="plan-abc",
+        prompt="第一次",
+        description="Plan 摘要",
+        metadata=None,
+        cancel_event=None,
+    )
+
+    # 尝试以 Worker 类型 resume Plan child，应该失败
+    with pytest.raises(ValueError, match="CHILD_AGENT_CONTEXT_INVALID"):
+        await runner.run_child(
+            session_id="session-type",
+            parent_run_id="master-run-2",
+            tool_call_id="call-2",
+            subagent_type="Worker",
+            child_id="plan-abc",
+            prompt="第二次",
+            description="Worker 摘要",
+            metadata=None,
+            cancel_event=None,
+            is_resume=True,
+        )
+
+    # 旧摘要应保持不变
+    summaries = await session_store.list_session_child_summaries("session-type")
+    assert len(summaries) == 1
+    assert summaries[0].subagent_type == "Plan"
+    assert summaries[0].description == "Plan 摘要"
+
+
+def _create_stub_tool(name: str) -> Tool:
+    """创建测试用桩工具。"""
+    class StubTool(Tool):
+        @property
+        def name(self) -> str:
+            return name
+        @property
+        def description(self) -> str:
+            return ""
+        @property
+        def input_schema(self) -> dict:
+            return {"type": "object", "properties": {}}
+        async def call(self, input: dict, context) -> ToolResult:
+            return ToolResult(content="ok")
+    return StubTool()

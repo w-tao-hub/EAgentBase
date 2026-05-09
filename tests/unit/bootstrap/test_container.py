@@ -303,22 +303,22 @@ async def test_container_registers_task_tools(fake_redis, monkeypatch) -> None:
 
     tool_registry = container._agent_provider.get_default_profile().tool_registry  # 读取工具注册表。
 
-    from app.infra.tools.task_create_tool import TaskCreateTool  # 导入任务创建工具类型用于断言。
-    from app.infra.tools.task_get_tool import TaskGetTool  # 导入任务获取工具类型用于断言。
-    from app.infra.tools.task_list_tool import TaskListTool  # 导入任务列表工具类型用于断言。
+    from app.infra.tools.plan_create_tool import PlanCreateTool  # 导入计划创建工具类型用于断言。
+    from app.infra.tools.plan_get_tool import PlanGetTool  # 导入计划获取工具类型用于断言。
+    from app.infra.tools.plan_list_tool import PlanListTool  # 导入计划列表工具类型用于断言。
     from app.infra.tools.query_tool_result_tool import QueryToolResultTool  # 导入结果查询工具类型用于断言。
-    from app.infra.tools.task_update_tool import TaskUpdateTool  # 导入任务更新工具类型用于断言。
+    from app.infra.tools.plan_update_tool import PlanUpdateTool  # 导入计划更新工具类型用于断言。
 
-    create_tool = tool_registry.get("task_create")
-    get_tool = tool_registry.get("task_get")
-    update_tool = tool_registry.get("task_update")
-    list_tool = tool_registry.get("task_list")
+    create_tool = tool_registry.get("plan_create")
+    get_tool = tool_registry.get("plan_get")
+    update_tool = tool_registry.get("plan_update")
+    list_tool = tool_registry.get("plan_list")
     query_tool_result = tool_registry.get("query_tool_result")
 
-    assert isinstance(create_tool, TaskCreateTool)  # 断言 task_create 已注册且类型正确。
-    assert isinstance(get_tool, TaskGetTool)  # 断言 task_get 已注册且类型正确。
-    assert isinstance(update_tool, TaskUpdateTool)  # 断言 task_update 已注册且类型正确。
-    assert isinstance(list_tool, TaskListTool)  # 断言 task_list 已注册且类型正确。
+    assert isinstance(create_tool, PlanCreateTool)  # 断言 plan_create 已注册且类型正确。
+    assert isinstance(get_tool, PlanGetTool)  # 断言 plan_get 已注册且类型正确。
+    assert isinstance(update_tool, PlanUpdateTool)  # 断言 plan_update 已注册且类型正确。
+    assert isinstance(list_tool, PlanListTool)  # 断言 plan_list 已注册且类型正确。
     assert isinstance(query_tool_result, QueryToolResultTool)  # 断言 query_tool_result 已注册且类型正确。
 
     assert create_tool._task_service is not None  # 断言工具已注入 task_service。
@@ -346,16 +346,16 @@ async def test_container_registered_task_tools_support_smoke_flow(fake_redis, mo
     container = Container.create(settings=Settings(redis_url="redis://localhost:6379"))  # 创建容器。
 
     tool_registry = container._agent_provider.get_default_profile().tool_registry  # 读取容器内部工具注册表。
-    create_tool = tool_registry.get("task_create")  # 取出任务创建工具。
-    get_tool = tool_registry.get("task_get")  # 取出任务获取工具。
-    update_tool = tool_registry.get("task_update")  # 取出任务更新工具。
-    list_tool = tool_registry.get("task_list")  # 取出任务列表工具。
+    create_tool = tool_registry.get("plan_create")  # 取出计划创建工具。
+    get_tool = tool_registry.get("plan_get")  # 取出计划获取工具。
+    update_tool = tool_registry.get("plan_update")  # 取出计划更新工具。
+    list_tool = tool_registry.get("plan_list")  # 取出计划列表工具。
     context = _build_tool_context()  # 构造四个工具共享的执行上下文。
 
-    assert create_tool is not None  # 断言任务创建工具已成功注册。
-    assert get_tool is not None  # 断言任务获取工具已成功注册。
-    assert update_tool is not None  # 断言任务更新工具已成功注册。
-    assert list_tool is not None  # 断言任务列表工具已成功注册。
+    assert create_tool is not None  # 断言计划创建工具已成功注册。
+    assert get_tool is not None  # 断言计划获取工具已成功注册。
+    assert update_tool is not None  # 断言计划更新工具已成功注册。
+    assert list_tool is not None  # 断言计划列表工具已成功注册。
 
     create_result = await create_tool.call(  # 先通过创建工具写入一条任务。
         {
@@ -424,7 +424,7 @@ async def test_container_registers_skill_tool_from_root_skills_directory(fake_re
     skill_tool = tool_registry.get("skill")
 
     assert skill_tool is not None
-    assert "task_create" in tool_registry
+    assert "plan_create" in tool_registry
 
 
 @pytest.mark.asyncio
@@ -462,3 +462,30 @@ async def test_container_registers_run_python_script_tool(fake_redis, monkeypatc
     run_python_script_def = next(t for t in llm_tools if t["function"]["name"] == "run_python_script")
     assert run_python_script_def["function"]["description"]  # 断言描述非空
     assert run_python_script_def["function"]["parameters"]  # 断言参数 schema 非空
+
+
+@pytest.mark.asyncio
+async def test_container_registers_list_resumable_subagents_tool(fake_redis, monkeypatch) -> None:
+    """验证容器注册表中包含 ListResumableSubagents 工具。"""
+    llm_adapter = StubLLMAdapter()
+    monkeypatch.setattr(
+        litellm_adapter_module,
+        "LiteLLMAdapter",
+        lambda *args, **kwargs: llm_adapter,
+    )
+    _patch_container_redis(monkeypatch, fake_redis)
+    monkeypatch.setattr(
+        Container,
+        "_create_mcp_client_manager",
+        staticmethod(lambda settings: StubMCPClientManager([])),
+    )
+
+    container = Container.create(settings=Settings(redis_url="redis://localhost:6379"))
+
+    tool_registry = container._agent_provider.get_default_profile().tool_registry
+
+    from app.infra.tools.list_resumable_subagents_tool import ListResumableSubagentsTool
+
+    list_tool = tool_registry.get("ListResumableSubagents")
+    assert list_tool is not None
+    assert isinstance(list_tool, ListResumableSubagentsTool)

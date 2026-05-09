@@ -14,6 +14,7 @@ from __future__ import annotations  # 启用未来注解，避免前向引用问
 import re  # 导入正则模块，用于生成安全的 child_id 前缀
 import uuid  # 导入 UUID 模块，用于生成唯一标识
 
+from app.core.models.agent import AgentExecutionProfile  # 导入子代理执行配置类型
 from app.core.models.error import ErrorCode  # 导入错误码枚举
 from app.core.models.execution_context import ExecutionContext  # 导入执行上下文模型
 from app.core.models.tool import Tool, ToolResult, ToolResultMeta  # 导入工具抽象基类和结果模型
@@ -30,13 +31,19 @@ class TaskTool(Tool):
     - 恢复执行：额外提供 resume 参数指向已有的 child_id
     """
 
-    def __init__(self, child_runner) -> None:
+    def __init__(
+        self,
+        child_runner,
+        child_profiles: dict[str, AgentExecutionProfile] | None = None,
+    ) -> None:
         """初始化 TaskTool。
 
         Args:
             child_runner: ChildAgentRunner 实例，负责实际执行 child agent
+            child_profiles: 子代理 profile 字典，key 为子代理类型名称，用于动态构建工具描述
         """
         self._child_runner = child_runner  # 保存 child runner 引用
+        self._child_profiles = child_profiles or {}  # 保存子代理 profile 字典
 
     @property
     def name(self) -> str:
@@ -45,21 +52,65 @@ class TaskTool(Tool):
 
     @property
     def description(self) -> str:
-        """工具描述，供 LLM 了解工具用途。"""
-        return "启动一个子代理，自主处理复杂的多步骤任务。"
+        """工具描述，供 LLM 了解工具用途。
+
+        动态生成：当存在子代理时，列出所有可用代理类型的名称、描述及可使用的工具列表；
+        无子代理时返回基础提示。
+        """
+        if not self._child_profiles:
+            return (
+                "启动一个子代理，自主处理复杂的多步骤任务。\n\n"
+                "当前无可用代理。"
+            )
+
+        lines: list[str] = [
+            "启动一个新代理，自主处理复杂的多步骤任务。",
+            "",
+            "任务工具会启动专用代理（子进程），自主处理复杂任务。每种代理类型都具备特定能力和可用工具。",
+            "",
+            "可用代理类型及其可使用的工具：",
+        ]
+
+        for name in sorted(self._child_profiles.keys()):
+            profile = self._child_profiles[name]
+            desc = profile.agent.description or ""
+            tool_names = profile.tool_registry.list_tools()
+            if tool_names:
+                tools_str = "、".join(tool_names)
+                lines.append(f"- {name}：{desc}（工具：{tools_str}）")
+            elif name == "Worker":
+                lines.append(f"- {name}：{desc}（工具由主代理动态指定）**优先使用其他可以满足需求的代理，若没有能满足的代理再使用 {name} 代理**")
+            else:
+                lines.append(f"- {name}：{desc}（无工具）")
+
+        lines.extend([
+            "",
+            "使用任务工具时，必须指定 subagent_type 参数以选择代理类型。",
+        ])
+
+        return "\n".join(lines)
 
     @property
     def input_schema(self) -> dict:
         """Task 工具输入参数的 JSON Schema 定义。
 
+        动态构建：subagent_type 的描述会根据 _child_profiles 动态提示当前可用的代理类型。
+
         必填参数：
         - description: 简短任务描述（3-5 词）
         - prompt: 代理要执行的具体任务内容
-        - subagent_type: 子代理类型名称（大小写敏感，如 "Plan"）
+        - subagent_type: 子代理类型名称（大小写敏感）
 
         可选参数：
         - resume: 要恢复执行的子代理 child_id
         """
+        # 构建可用代理类型提示
+        if self._child_profiles:
+            available = "、".join(sorted(self._child_profiles.keys()))
+            subagent_desc = f"子代理类型名称（当前可用：{available}）"
+        else:
+            subagent_desc = "子代理类型名称（当前无可用代理）"
+
         return {
             "type": "object",  # 参数类型为对象
             "properties": {  # 参数属性定义
@@ -72,12 +123,17 @@ class TaskTool(Tool):
                     "type": "string",  # 字符串类型
                 },
                 "subagent_type": {
-                    "description": "此任务使用的专用代理类型",  # 参数用途
+                    "description": subagent_desc,  # 参数用途，动态提示可用类型
                     "type": "string",  # 字符串类型
                 },
                 "resume": {
                     "description": "可选，要恢复的子代理 ID",  # 参数用途
                     "type": "string",  # 字符串类型
+                },
+                "tools": {
+                    "description": "可选，仅对提示中标注「工具由主代理动态指定」的代理类型生效，用于指定子代理可用工具名称列表",  # 参数用途
+                    "type": "array",  # 数组类型
+                    "items": {"type": "string"},  # 元素为字符串
                 },
             },
             "required": ["description", "prompt", "subagent_type"],  # 必填字段列表
@@ -95,7 +151,7 @@ class TaskTool(Tool):
         5. 返回包含 child 输出的 ToolResult
 
         Args:
-            input: 工具输入参数，必须包含 subagent_type 和 prompt
+            input: 工具输入参数，必须包含 description、subagent_type 和 prompt
             context: 执行上下文，包含 run_id、session_id、run_type 等
 
         Returns:
@@ -113,9 +169,16 @@ class TaskTool(Tool):
         # 解析入参并去除首尾空白
         subagent_type = str(input.get("subagent_type", "")).strip()  # 子代理类型
         prompt = str(input.get("prompt", "")).strip()  # 任务 prompt
+        description = str(input.get("description", "")).strip()  # 任务描述
         resume = str(input.get("resume", "")).strip()  # 可选 resume 参数
-        if not subagent_type or not prompt:  # 必填参数缺失
-            return ToolResult(content="Task 缺少 subagent_type 或 prompt", is_error=True)  # 返回错误
+        tools_raw = input.get("tools", None)  # 可选 tools 参数
+        tool_names = (
+            tuple(str(t).strip() for t in tools_raw if isinstance(t, str))
+            if isinstance(tools_raw, list)
+            else None
+        )  # 归一化为 tuple 或 None
+        if not description or not subagent_type or not prompt:  # 必填参数缺失
+            return ToolResult(content="Task 缺少 description、subagent_type 或 prompt", is_error=True)  # 返回错误
 
         # subagent_type 匹配大小写敏感："plan" 不会命中 "Plan"
         child_id = resume or self._new_child_id(subagent_type)  # 有 resume 时用现有 child_id，否则生成新的
@@ -128,9 +191,11 @@ class TaskTool(Tool):
                 subagent_type=subagent_type,  # 子代理类型
                 child_id=child_id,  # child 稳定标识
                 prompt=prompt,  # 任务 prompt
+                description=description,  # 任务描述
                 metadata=context.metadata,  # 请求元数据
                 cancel_event=context.cancel_event,  # 外部取消事件
                 is_resume=is_resume,  # 是否为 resume 模式
+                tool_names=tool_names,  # 动态工具列表
             )
         except ValueError as error:  # 捕获子代理执行中的业务异常
             return ToolResult(content=str(error), is_error=True)  # 将异常消息作为工具错误返回

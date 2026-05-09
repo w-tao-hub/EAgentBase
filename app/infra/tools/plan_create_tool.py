@@ -1,6 +1,6 @@
-"""任务创建工具实现。
+"""计划创建工具实现。
 
-提供 TaskCreateTool，负责为当前会话创建结构化任务。
+提供 PlanCreateTool，负责为当前会话创建结构化计划任务。
 """
 
 from __future__ import annotations  # 启用未来注解
@@ -14,11 +14,11 @@ if TYPE_CHECKING:  # 仅在类型检查时导入，避免循环依赖
     from app.core.models.execution_context import ExecutionContext
 
 
-class TaskCreateTool(Tool):
-    """创建任务工具。"""
+class PlanCreateTool(Tool):
+    """创建计划任务工具。"""
 
     def __init__(self, task_service: TaskService) -> None:
-        """初始化创建任务工具。
+        """初始化创建计划任务工具。
 
         Args:
             task_service: 任务业务服务实例。
@@ -28,7 +28,7 @@ class TaskCreateTool(Tool):
     @property
     def name(self) -> str:
         """工具标识符。"""
-        return "task_create"
+        return "plan_create"
 
     @property
     def description(self) -> str:
@@ -91,7 +91,7 @@ class TaskCreateTool(Tool):
 
         try:
             result = await self._task_service.create_task(
-                session_id=context.session_id,
+                session_id=context.resolve_plan_session_id(),
                 subject=subject,
                 description=description,
                 active_form=active_form,

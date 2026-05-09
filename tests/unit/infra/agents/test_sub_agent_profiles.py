@@ -29,8 +29,8 @@ def test_default_plan_definition_uses_relative_prompt_file() -> None:
     """测试默认 Plan 只配置相对 prompt 文件名。"""
     plan = DEFAULT_SUB_AGENT_DEFINITIONS[0]
 
-    assert plan.name == "Plan"
-    assert plan.prompt_file == "plan.md"
+    assert plan.name == "Worker"
+    assert plan.prompt_file == "worker.md"
     assert not plan.prompt_file.startswith("app/")
 
 
@@ -91,7 +91,7 @@ def test_profile_builder_filters_task_and_skips_missing_skill(tmp_path: Path) ->
         default_prompt_root=tmp_path,
     ).build_default_profile(definition)
 
-    assert profile.agent_id == "Plan"
+    assert profile.agent_id == "Worker"
     assert "Read" in profile.tool_registry
     assert "Task" not in profile.tool_registry
     assert profile.skills == ("known-skill",)

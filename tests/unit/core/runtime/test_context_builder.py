@@ -488,7 +488,7 @@ async def test_context_builder_keeps_assistant_tool_call_before_matched_tool_res
                 {
                     "id": "call-1",
                     "type": "function",
-                    "function": {"name": "task_get", "arguments": "{}"},
+                    "function": {"name": "plan_get", "arguments": "{}"},
                 }
             ],
         ),
@@ -497,7 +497,7 @@ async def test_context_builder_keeps_assistant_tool_call_before_matched_tool_res
             content='{"id":"1"}',
             timestamp=datetime(2026, 4, 10, 10, 0, 1, tzinfo=timezone.utc),
             tool_call_id="call-1",
-            name="task_get",
+            name="plan_get",
         ),
     ]
 
@@ -516,7 +516,7 @@ async def test_context_builder_keeps_assistant_tool_call_before_matched_tool_res
                 {
                     "id": "call-1",
                     "type": "function",
-                    "function": {"name": "task_get", "arguments": "{}"},
+                    "function": {"name": "plan_get", "arguments": "{}"},
                 }
             ],
         },
@@ -524,7 +524,7 @@ async def test_context_builder_keeps_assistant_tool_call_before_matched_tool_res
             "role": "tool",
             "content": '{"id":"1"}',
             "tool_call_id": "call-1",
-            "name": "task_get",
+            "name": "plan_get",
         },
     ]
 

@@ -24,6 +24,7 @@ class ExecutionContext:
         agent: Agent 配置对象，包含模型、系统提示等信息
         cancel_event: 异步取消事件，用于外部中断当前运行
         run_type: 运行类型，区分 master 主运行和 child 子运行，默认 master
+        child_id: 子代理会话内稳定标识，用于 plan/task 隔离命名空间
         tool_call_id: 当前工具调用的唯一 ID，在 for_tool_call() 派生时设置
         tool_name: 当前工具的名称，在 for_tool_call() 派生时设置
     """
@@ -47,6 +48,10 @@ class ExecutionContext:
 
     # 运行类型，用于区分主运行（master）和子代理运行（child），默认为 master
     run_type: str = "master"
+
+    # 子代理的会话内稳定标识符。仅当 run_type="child" 时设置，
+    # 主代理上下文保持 None，用于 plan/task 隔离命名空间推导。
+    child_id: str | None = None
 
     # 当前工具调用的唯一标识符，None 表示不在工具调用上下文中
     tool_call_id: str | None = None
@@ -75,6 +80,21 @@ class ExecutionContext:
             agent=self.agent,
             cancel_event=self.cancel_event,
             run_type=self.run_type,
+            child_id=self.child_id,
             tool_call_id=tool_call_id,
             tool_name=tool_name,
         )
+
+    def resolve_plan_session_id(self) -> str:
+        """解析 plan/task 存储使用的隔离 session ID。
+
+        子代理调用（run_type="child" 且 child_id 非空）时返回
+        "{session_id}:child:{child_id}" 组合键，使不同子代理的
+        task 数据在 Redis 中物理隔离。主代理调用时返回原始 session_id。
+
+        Returns:
+            用于 plan/task 存储的隔离 session ID 字符串。
+        """
+        if self.run_type == "child" and self.child_id:
+            return f"{self.session_id}:child:{self.child_id}"
+        return self.session_id

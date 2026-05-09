@@ -74,7 +74,7 @@ class TestBuildToolRegistry:
             settings=settings,
             runtime=MagicMock(),
             tool_catalog=tool_catalog,
-            hook_profiles=MagicMock(),
+            hook_registry=MagicMock(),
             skill_catalog=MagicMock(),
             default_prompt_root=Path("/tmp"),
             default_max_turns=10,

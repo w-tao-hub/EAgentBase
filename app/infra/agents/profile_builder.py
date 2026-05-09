@@ -10,13 +10,13 @@ from __future__ import annotations
 from pathlib import Path
 
 from app.config import Settings
-from app.core.hooks import ToolHookPipeline
+from app.core.hooks import ModelHookPipeline, ToolHookPipeline
 from app.core.models.error import ErrorCode
 from app.core.models.agent import Agent, AgentExecutionProfile, AgentPromptSource
 from app.core.models.tool import Tool, ToolRegistry
 from app.infra.agents.custom_sub_agent_loader import CustomSubAgentDefinition
 from app.infra.agents.default_sub_agents import DefaultSubAgentDefinition
-from app.infra.agents.hook_profiles import HookProfileRegistry
+from app.infra.agents.hook_profiles import HookRegistry
 from app.infra.skills.catalog import SkillCatalog
 
 # child profile 中自动过滤的主控工具
@@ -33,7 +33,7 @@ class SubAgentProfileBuilder:
     - tools == ()：显式配置为空工具集合
     - skills is None：不加载任何 skill 配置
     - skills == ()：显式配置为空 skill 集合
-    - hook_profile is None：使用空 ToolHookPipeline()
+    - tool_hook_profiles / model_hook_profiles 为 None 或 ()：使用空管线
     - 包含 Task/ListResumableSubagents 的工具名自动过滤，不报错
     - 未知非主控的工具名报 INVALID_SUBAGENT_CONFIG
     - 不存在的 skill 静默跳过
@@ -45,7 +45,7 @@ class SubAgentProfileBuilder:
         settings: Settings,
         runtime: object,
         tool_catalog: dict[str, Tool],
-        hook_profiles: HookProfileRegistry,
+        hook_registry: HookRegistry,
         skill_catalog: SkillCatalog,
         default_prompt_root: Path,
         default_max_turns: int | None = None,
@@ -53,7 +53,7 @@ class SubAgentProfileBuilder:
         self._settings = settings
         self._runtime = runtime
         self._tool_catalog = tool_catalog
-        self._hook_profiles = hook_profiles
+        self._hook_registry = hook_registry
         self._skill_catalog = skill_catalog
         self._default_prompt_root = default_prompt_root
         self._default_max_turns = default_max_turns or settings.agent_max_turns
@@ -72,7 +72,8 @@ class SubAgentProfileBuilder:
             tools=definition.tools,
             skills=definition.skills,
             max_turns=definition.max_turns,
-            hook_profile=definition.hook_profile,
+            tool_hook_profiles=definition.tool_hook_profiles,
+            model_hook_profiles=definition.model_hook_profiles,
             extra_system_messages=definition.extra_system_messages,
         )
 
@@ -89,7 +90,8 @@ class SubAgentProfileBuilder:
             tools=definition.tools,
             skills=definition.skills,
             max_turns=definition.max_turns,
-            hook_profile=definition.hook_profile,
+            tool_hook_profiles=definition.tool_hook_profiles,
+            model_hook_profiles=definition.model_hook_profiles,
             extra_system_messages=(),
         )
 
@@ -103,7 +105,8 @@ class SubAgentProfileBuilder:
         tools: tuple[str, ...] | None,
         skills: tuple[str, ...] | None,
         max_turns: int | None,
-        hook_profile: str | None,
+        tool_hook_profiles: tuple[str, ...] | None,
+        model_hook_profiles: tuple[str, ...] | None,
         extra_system_messages: tuple[str, ...],
     ) -> AgentExecutionProfile:
         """组装通用 child profile（model/temperature 统一复用 master 配置）。"""
@@ -124,7 +127,8 @@ class SubAgentProfileBuilder:
             prompt_source=prompt_source,
             runtime=self._runtime,
             tool_registry=registry,
-            tool_hook_pipeline=self._resolve_tool_hook_pipeline(hook_profile),
+            tool_hook_pipeline=self._resolve_tool_hook_pipeline(tool_hook_profiles),
+            model_hook_pipeline=self._resolve_model_hook_pipeline(model_hook_profiles),
             max_turns=max_turns or self._default_max_turns,
             skills=loaded_skills,
             extra_system_messages=tuple(extra_system_messages) + skill_messages,
@@ -167,8 +171,16 @@ class SubAgentProfileBuilder:
             messages.append(f"<skill name=\"{document.name}\">\n{document.content}\n</skill>")
         return tuple(loaded_names), tuple(messages)
 
-    def _resolve_tool_hook_pipeline(self, hook_profile: str | None) -> ToolHookPipeline:
-        """解析 Hook profile，None 返回空管线。"""
-        if hook_profile is None:
+    def _resolve_tool_hook_pipeline(self, hook_names: tuple[str, ...] | None) -> ToolHookPipeline:
+        """按名称列表组装 ToolHook 管线，None 或空元组返回空管线。"""
+        if not hook_names:
             return ToolHookPipeline()
-        return self._hook_profiles.get(hook_profile)
+        hooks = [self._hook_registry.get_tool_hook(name) for name in hook_names]
+        return ToolHookPipeline(hooks)
+
+    def _resolve_model_hook_pipeline(self, hook_names: tuple[str, ...] | None) -> ModelHookPipeline | None:
+        """按名称列表组装 ModelHook 管线，None 或空元组返回 None。"""
+        if not hook_names:
+            return None
+        hooks = [self._hook_registry.get_model_hook(name) for name in hook_names]
+        return ModelHookPipeline(hooks)

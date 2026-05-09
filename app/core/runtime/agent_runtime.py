@@ -186,15 +186,16 @@ class AgentRuntime:
             str: 流式文本片段
             TurnComplete: 最终完成标记
         """
-        # # 初始化累积变量
         text_parts: list[str] = []
         reasoning_parts: list[str] = []
-        # 工具调用累积器，key 使用 tool_call 的 index。后续片段往往只携带 index，
-        # 不会重复携带 id / function_name，因此必须按 index 归并，不能只按 id 归并。
         tool_call_accumulator: dict[int, dict] = {}
         usage_info: UsageInfo | None = None
 
-        # 构造模型请求对象，并通过 before_model Hook 串行改写。
+        # 优先使用 profile 中的 model_hook_pipeline，否则回退到 runtime 默认
+        model_hook_pipeline = (
+            getattr(agent, "model_hook_pipeline", None) or self._model_hook_pipeline
+        )
+
         model_request = ModelRequest(
             messages=list(messages),
             tools=list(tools) if tools is not None else None,
@@ -202,7 +203,7 @@ class AgentRuntime:
             temperature=agent.temperature,
         )
         if context is not None:
-            model_request = await self._model_hook_pipeline.before_model(model_request, context)
+            model_request = await model_hook_pipeline.before_model(model_request, context)
 
         async for chunk in self._llm_adapter.stream_completion(
             model=model_request.model,
@@ -289,7 +290,7 @@ class AgentRuntime:
             usage=usage_info,
         )
         if context is not None:
-            model_response = await self._model_hook_pipeline.after_model(model_response, context)
+            model_response = await model_hook_pipeline.after_model(model_response, context)
 
         # after_model 若改写 text，不会回放已流出的 chunk；当前仅对 tool_calls / usage 生效
         yield TurnComplete(

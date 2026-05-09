@@ -7,14 +7,22 @@ from pathlib import Path
 import pytest
 
 from app.config import Settings
-from app.core.hooks import ToolHookPipeline
+from app.core.hooks import ToolHook, ToolHookPipeline
 from app.core.models.tool import ToolResult
 from app.infra.agents.custom_sub_agent_loader import CustomSubAgentLoader
 from app.infra.agents.default_sub_agents.definitions import DEFAULT_SUB_AGENT_DEFINITIONS
-from app.infra.agents.hook_profiles import HookProfileRegistry
+from app.infra.agents.hook_profiles import HookRegistry
 from app.infra.agents.profile_builder import SubAgentProfileBuilder
 from app.infra.skills.catalog import SkillCatalog, SkillDocument
 from tests.fakes import FakeAgentRuntime, FakeTool
+
+
+class _FakeToolHook(ToolHook):
+    """测试用最小 ToolHook 实现。"""
+    async def before_tool(self, request, context):
+        return request
+    async def after_tool(self, response, context):
+        return response
 
 
 def _tool_catalog() -> dict[str, FakeTool]:
@@ -68,7 +76,7 @@ def test_profile_builder_filters_task_and_skips_missing_skill(tmp_path: Path) ->
         prompt_file="plan.md",
         tools=("Read", "Task"),
         skills=("known-skill", "missing-skill"),
-        hook_profile=None,
+        tool_hook_profiles=None,
     )
     skill_catalog = SkillCatalog(
         {
@@ -80,13 +88,13 @@ def test_profile_builder_filters_task_and_skips_missing_skill(tmp_path: Path) ->
             )
         }
     )
-    hook_profiles = HookProfileRegistry({"review-hooks": ToolHookPipeline()})
+    hook_registry = HookRegistry(tool_hooks={"review-hooks": _FakeToolHook()}, model_hooks={})
 
     profile = SubAgentProfileBuilder(
         settings=Settings(redis_url="redis://localhost:6379/0"),
         runtime=FakeAgentRuntime(),
         tool_catalog=_tool_catalog(),
-        hook_profiles=hook_profiles,
+        hook_registry=hook_registry,
         skill_catalog=skill_catalog,
         default_prompt_root=tmp_path,
     ).build_default_profile(definition)
@@ -114,40 +122,32 @@ def test_custom_loader_rejects_name_conflict_with_default_plan(tmp_path: Path) -
         CustomSubAgentLoader(tmp_path, reserved_names={"Plan"}).load()
 
 
-def test_hook_profile_registry_rejects_unknown_name() -> None:
-    """测试 HookProfileRegistry 对非法 hook_profile 名称抛出 INVALID_SUBAGENT_CONFIG。
+def test_hook_registry_rejects_unknown_name() -> None:
+    """测试 HookRegistry 对非法 tool_hook 名称抛出 INVALID_SUBAGENT_CONFIG。"""
+    registry = HookRegistry(tool_hooks={"review-hooks": _FakeToolHook()}, model_hooks={})
 
-    当子代理定义中引用了未在代码侧预注册的 Hook profile 名称时，
-    HookProfileRegistry 应拒绝隐式回退到默认 Hook，直接抛出配置错误。
-    """
-    registry = HookProfileRegistry({"review-hooks": ToolHookPipeline()})  # 创建注册表，只注册 review-hooks
-
-    with pytest.raises(ValueError, match="INVALID_SUBAGENT_CONFIG"):  # 断言抛出包含正确错误码的异常
-        registry.get("non-existent-profile")  # 尝试获取不存在的 profile
+    with pytest.raises(ValueError, match="INVALID_SUBAGENT_CONFIG"):
+        registry.get_tool_hook("non-existent")
 
 
-def test_profile_builder_rejects_invalid_hook_profile(tmp_path: Path) -> None:
-    """测试 profile builder 中 hook_profile 不存在时报 INVALID_SUBAGENT_CONFIG。
-
-    当默认子代理定义中 hook_profile 指向一个未在 HookProfileRegistry
-    中注册的名称时，SubAgentProfileBuilder.build_default_profile 应抛异常。
-    """
+def test_profile_builder_rejects_invalid_tool_hook_profiles(tmp_path: Path) -> None:
+    """测试 profile builder 中 tool_hook 名称不存在时报 INVALID_SUBAGENT_CONFIG。"""
     from app.config import Settings
 
-    prompt_file = tmp_path / "plan.md"  # 创建临时 prompt 文件
-    prompt_file.write_text("你是计划代理。", encoding="utf-8")  # 写入测试 prompt 内容
-    definition = DEFAULT_SUB_AGENT_DEFINITIONS[0].with_overrides(  # 基于默认 Plan 定义覆盖配置
-        prompt_file="plan.md",  # 使用相对 prompt 文件名，确保命中 hook_profile 校验分支
-        hook_profile="non-existent",  # 指向不存在的 Hook profile
+    prompt_file = tmp_path / "plan.md"
+    prompt_file.write_text("你是计划代理。", encoding="utf-8")
+    definition = DEFAULT_SUB_AGENT_DEFINITIONS[0].with_overrides(
+        prompt_file="plan.md",
+        tool_hook_profiles=("non-existent",),
     )
-    hook_profiles = HookProfileRegistry({"review-hooks": ToolHookPipeline()})  # 创建注册表，只注册 review-hooks
+    hook_registry = HookRegistry(tool_hooks={"review-hooks": _FakeToolHook()}, model_hooks={})
 
-    with pytest.raises(ValueError, match="INVALID_SUBAGENT_CONFIG"):  # 断言抛出包含正确错误码的异常
-        SubAgentProfileBuilder(  # 创建 profile 组装器
-            settings=Settings(redis_url="redis://localhost:6379/0"),  # 最小配置
-            runtime=FakeAgentRuntime(),  # 假运行时
-            tool_catalog={},  # 空工具目录
-            hook_profiles=hook_profiles,  # 注入不包含 "non-existent" 的注册表
-            skill_catalog=SkillCatalog({}),  # 空 skill 目录
-            default_prompt_root=tmp_path,  # 使用临时目录作为 prompt 根目录
-        ).build_default_profile(definition)  # 组装 profile，应触发 ValueError
+    with pytest.raises(ValueError, match="INVALID_SUBAGENT_CONFIG"):
+        SubAgentProfileBuilder(
+            settings=Settings(redis_url="redis://localhost:6379/0"),
+            runtime=FakeAgentRuntime(),
+            tool_catalog={},
+            hook_registry=hook_registry,
+            skill_catalog=SkillCatalog({}),
+            default_prompt_root=tmp_path,
+        ).build_default_profile(definition)

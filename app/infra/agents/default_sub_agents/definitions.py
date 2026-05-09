@@ -15,7 +15,8 @@ class DefaultSubAgentDefinition:
     tools: tuple[str, ...] | None = None
     skills: tuple[str, ...] | None = None
     max_turns: int | None = None
-    hook_profile: str | None = None
+    tool_hook_profiles: tuple[str, ...] | None = None
+    model_hook_profiles: tuple[str, ...] | None = None
     extra_system_messages: tuple[str, ...] = ()
 
     def with_overrides(self, **changes: object) -> "DefaultSubAgentDefinition":
@@ -31,7 +32,8 @@ DEFAULT_SUB_AGENT_DEFINITIONS: tuple[DefaultSubAgentDefinition, ...] = (
         tools=(),
         skills=None,
         max_turns=100,
-        hook_profile=None,
+        tool_hook_profiles=None,
+        model_hook_profiles=None,
         extra_system_messages=(),
     ),
 )

@@ -9,6 +9,9 @@ tools:
   - plan_list
 skills:
   - find-skills
+tool_hook_profiles:
+  - persist_large_result
+model_hook_profiles:
 ---
 
 你是 Echo 子代理，专门用于测试验证。

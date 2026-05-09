@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 
 if TYPE_CHECKING:
     from app.core.models.tool import ToolRegistry
-    from app.core.hooks.pipeline import ToolHookPipeline
+    from app.core.hooks.pipeline import ModelHookPipeline, ToolHookPipeline
 
 
 class Agent(BaseModel):
@@ -53,5 +53,6 @@ class AgentExecutionProfile:
     tool_registry: "ToolRegistry"
     tool_hook_pipeline: "ToolHookPipeline"
     max_turns: int
+    model_hook_pipeline: "ModelHookPipeline | None" = None
     skills: tuple[str, ...] = field(default_factory=tuple)
     extra_system_messages: tuple[str, ...] = field(default_factory=tuple)

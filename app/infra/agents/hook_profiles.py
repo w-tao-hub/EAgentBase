@@ -1,26 +1,35 @@
-"""子代理 Hook profile 注册表。"""
+"""注册单个 ToolHook 和 ModelHook，子代理按名称组合成管线。"""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
-from app.core.hooks import ToolHookPipeline
+from app.core.hooks import ModelHook, ModelHookPipeline, ToolHook, ToolHookPipeline
 from app.core.models.error import ErrorCode
 
 
 @dataclass(frozen=True, slots=True)
-class HookProfileRegistry:
-    """代码侧预注册 Hook 组，md 只能按名称引用。
+class HookRegistry:
+    """注册单个 ToolHook 和 ModelHook。
 
-    profile 不存在时视为配置错误，不允许隐式回退到默认 Hook。
-    若子代理不需要 Hook，直接在子代理定义中将 hook_profile 设为 None。
+    子代理通过 tool_hook_profiles / model_hook_profiles 字段
+    指定多个 hook 名称，profile builder 按顺序组装为对应管线。
+    设为 None 或空元组表示不使用对应类型的 Hook。
     """
 
-    profiles: dict[str, ToolHookPipeline]
+    tool_hooks: dict[str, ToolHook]
+    model_hooks: dict[str, ModelHook]
 
-    def get(self, name: str) -> ToolHookPipeline:
-        """按名称获取 Hook 管线。"""
+    def get_tool_hook(self, name: str) -> ToolHook:
+        """按名称获取 ToolHook 实例。"""
         try:
-            return self.profiles[name]
+            return self.tool_hooks[name]
         except KeyError as exc:
-            raise ValueError(f"{ErrorCode.INVALID_SUBAGENT_CONFIG.value}: 未知 hook_profile: {name}") from exc
+            raise ValueError(f"{ErrorCode.INVALID_SUBAGENT_CONFIG.value}: 未知 tool_hook: {name}") from exc
+
+    def get_model_hook(self, name: str) -> ModelHook:
+        """按名称获取 ModelHook 实例。"""
+        try:
+            return self.model_hooks[name]
+        except KeyError as exc:
+            raise ValueError(f"{ErrorCode.INVALID_SUBAGENT_CONFIG.value}: 未知 model_hook: {name}") from exc

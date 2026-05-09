@@ -436,6 +436,10 @@ MCP 用于接入外部工具服务（数据库、文件系统、Web 等），Ski
 
 > 提示：在 `agents/` 目录下创建 `.md` 文件定义子代理配置，或直接在 `app/infra/agents/default_sub_agents/definitions.py` 中添加声明式配置。
 
+> **Hook 配置说明**：子代理支持 `tool_hook_profiles` 和 `model_hook_profiles` 两个字段，值为 Hook 名称列表。名称必须与 `app/bootstrap/container.py` 中 `HookRegistry` 注册的 key 对应。当前内置 Hook 及对应名称：
+> - `persist_large_result` — 大工具结果持久化（ToolHook）
+> 添加自定义 Hook 时，先在 `container.py` 的 `HookRegistry(tool_hooks={...}, model_hooks={...})` 中注册，然后在子代理配置中引用注册的名称即可。
+
 ### 第五步：调整系统提示词 + 调整工具描述提示词
 
 修改主智能体的行为风格、约束规则等。

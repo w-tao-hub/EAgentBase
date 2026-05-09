@@ -44,7 +44,7 @@ from app.infra.tools.plan_update_tool import PlanUpdateTool
 from app.infra.agents.default_sub_agents import DEFAULT_SUB_AGENT_DEFINITIONS
 from app.infra.agents.custom_sub_agent_loader import CustomSubAgentLoader
 from app.infra.agents.profile_builder import SubAgentProfileBuilder
-from app.infra.agents.hook_profiles import HookProfileRegistry
+from app.infra.agents.hook_profiles import HookRegistry
 from app.services.child_agent_runner import ChildAgentRunner
 from app.infra.tools.task_tool import TaskTool
 from app.infra.tools.list_resumable_subagents_tool import ListResumableSubagentsTool
@@ -80,6 +80,7 @@ class _RuntimeBundle:
     llm_adapter: object
     runtime: object
     tool_hook_pipeline: ToolHookPipeline
+    hook_registry: "HookRegistry"
 
 
 @dataclass
@@ -222,11 +223,13 @@ class Container:
     @classmethod
     def _build_runtime_bundle(cls, settings: Settings, infra: _InfraBundle) -> _RuntimeBundle:
         """装配运行时与默认 Hook 管线。"""
-        # model_hooks 默认为空链，tool_hooks 默认仅挂载大结果持久化 Hook
-        installed_model_hooks = []
-        model_hook_pipeline = ModelHookPipeline(installed_model_hooks)
-        installed_tool_hooks = [PersistLargeToolResultHook(infra.tool_result_store)]
-        tool_hook_pipeline = ToolHookPipeline(installed_tool_hooks)
+        model_hook_pipeline = ModelHookPipeline([])
+        persist_hook = PersistLargeToolResultHook(infra.tool_result_store)
+        tool_hook_pipeline = ToolHookPipeline([persist_hook])
+        hook_registry = HookRegistry(
+            tool_hooks={"persist_large_result": persist_hook},
+            model_hooks={},
+        )
         stream_text_guard = NoOpStreamTextGuard()
 
         from app.infra.llm.litellm_adapter import LiteLLMAdapter
@@ -244,6 +247,7 @@ class Container:
             llm_adapter=llm_adapter,
             runtime=runtime,
             tool_hook_pipeline=tool_hook_pipeline,
+            hook_registry=hook_registry,
         )
 
     @classmethod
@@ -289,14 +293,13 @@ class Container:
         tooling: _ToolingBundle,
     ) -> _ProfilesBundle:
         """装配 agent profiles 与运行侧协作者。"""
-        hook_profiles = HookProfileRegistry({})
         project_root = Path(__file__).resolve().parents[2]
         default_prompt_root = project_root / "app" / "infra" / "agents" / "default_sub_agents"
         profile_builder = SubAgentProfileBuilder(
             settings=settings,
             runtime=runtime_bundle.runtime,
             tool_catalog=tooling.base_tool_catalog,
-            hook_profiles=hook_profiles,
+            hook_registry=runtime_bundle.hook_registry,
             skill_catalog=tooling.skill_catalog,
             default_prompt_root=default_prompt_root,
         )

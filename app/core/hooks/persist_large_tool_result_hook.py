@@ -31,7 +31,7 @@ class PersistLargeToolResultHook(ToolHook):
 
     def __init__(self, store: ToolResultPersistenceStore) -> None:
         """初始化 Hook。"""
-        super().__init__()
+        super().__init__(fail_open=False)
         self._store = store
 
     async def after_tool(self, response: ToolResponse, context) -> ToolResponse:

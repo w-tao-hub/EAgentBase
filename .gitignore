@@ -57,3 +57,8 @@ mcp_servers.json
 
 
 **/.DS_Store
+
+docs/
+.claude/
+.codex/
+AGENTS.md

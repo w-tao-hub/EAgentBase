@@ -1,4 +1,4 @@
-# Agent Framework
+# E Agent Base
 
 ## 项目定位
 

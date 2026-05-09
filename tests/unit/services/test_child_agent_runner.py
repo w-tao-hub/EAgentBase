@@ -4,29 +4,29 @@
 以及子代理类型一致性检查等核心功能。
 """
 
-from __future__ import annotations  # 启用未来注解，避免前向引用问题
+from __future__ import annotations
 
-from datetime import datetime, timezone  # 导入日期时间类，用于构造时间戳
+from datetime import datetime, timezone
 import asyncio
-from unittest.mock import MagicMock  # 导入 MagicMock，用于构造最小 runner 依赖
+from unittest.mock import MagicMock
 
-import pytest  # 导入 pytest 测试框架
+import pytest
 
-from app.config import Settings  # 导入应用配置
-from app.core.hooks import ToolHookPipeline  # 导入空 Hook 管线
-from app.core.loop.agent_loop import AgentLoop  # 导入 AgentLoop 编排器
-from app.core.models.error import ErrorCode  # 导入错误码，用于断言取消错误语义
-from app.core.runtime.agent_runtime import TurnComplete  # 导入 TurnComplete 标记，用于模拟 stream_once 返回
-from app.core.models.agent import Agent, AgentExecutionProfile, AgentPromptSource  # 导入 Agent 相关模型
-from app.core.models.run import Run, RunStatus  # 导入 Run 模型和状态枚举
-from app.core.models.session import Session  # 导入 Session 模型
-from app.core.models.stored_message import StoredMessage  # 导入存储消息模型
-from app.core.models.tool import Tool, ToolResult, ToolRegistry  # 导入工具基类、结果模型和注册表
-from app.core.models.execution_context import ExecutionContext  # 导入执行上下文
-from app.infra.store.redis_run_store import RedisRunStore  # 导入 Run 存储
-from app.infra.store.redis_session_store import RedisSessionStore  # 导入 Session 存储
-from app.services.child_agent_runner import ChildAgentRunner  # 导入被测试的 ChildAgentRunner
-from tests.fakes import FakeAgentRuntime  # 导入假运行时
+from app.config import Settings
+from app.core.hooks import ToolHookPipeline
+from app.core.loop.agent_loop import AgentLoop
+from app.core.models.error import ErrorCode
+from app.core.runtime.agent_runtime import TurnComplete
+from app.core.models.agent import Agent, AgentExecutionProfile, AgentPromptSource
+from app.core.models.run import Run, RunStatus
+from app.core.models.session import Session
+from app.core.models.stored_message import StoredMessage
+from app.core.models.tool import Tool, ToolResult, ToolRegistry
+from app.core.models.execution_context import ExecutionContext
+from app.infra.store.redis_run_store import RedisRunStore
+from app.infra.store.redis_session_store import RedisSessionStore
+from app.services.child_agent_runner import ChildAgentRunner
+from tests.fakes import FakeAgentRuntime
 
 
 def _plan_profile(runtime: FakeAgentRuntime) -> AgentExecutionProfile:
@@ -210,7 +210,7 @@ async def test_child_runner_marks_history_dirty(fake_redis) -> None:
     ChildAgentRunner 会正确标记 child 历史为 dirty 状态，
     同时 child run 仍正常完成执行流程。
     """
-    from app.core.runtime.agent_runtime import TurnComplete  # 导入 TurnComplete 标记
+    from app.core.runtime.agent_runtime import TurnComplete
 
     session_store = RedisSessionStore(fake_redis, key_prefix="test")  # 创建会话存储
     run_store = RedisRunStore(fake_redis, key_prefix="test")  # 创建运行存储

@@ -1,24 +1,24 @@
 """ChatService 单元测试。"""
 
-from __future__ import annotations  # 启用未来注解
+from __future__ import annotations
 
-import asyncio  # 导入 asyncio，测试提前关闭流时的锁释放行为
-from datetime import datetime, timezone  # 导入日期时间类和 UTC 时区
-from typing import Any  # 导入任意类型
+import asyncio
+from datetime import datetime, timezone
+from typing import Any
 
-import pytest  # 导入 pytest 测试框架
+import pytest
 
-from app.services.chat_service import ChatService  # 导入被测服务
-from app.services.agent_provider import AgentProvider  # 导入 Agent 提供者协议
-from app.infra.store.redis_session_store import RedisSessionStore  # 导入会话存储
-from app.infra.store.redis_run_store import RedisRunStore  # 导入 Run 存储
-from app.infra.store.redis_lock_store import RedisLockStore  # 导入锁存储
-from app.core.models.session import Session  # 导入会话模型
-from app.core.models.agent import Agent, AgentExecutionProfile, AgentPromptSource  # 导入 Agent 模型和执行配置
-from app.core.hooks import ToolHookPipeline  # 导入工具 Hook 管线
-from app.core.models.run import Run, RunStatus  # 导入 Run 模型和状态枚举
-from app.core.models.stored_message import StoredMessage  # 导入消息模型
-from app.core.models.event import (  # 导入事件模型
+from app.services.chat_service import ChatService
+from app.services.agent_provider import AgentProvider
+from app.infra.store.redis_session_store import RedisSessionStore
+from app.infra.store.redis_run_store import RedisRunStore
+from app.infra.store.redis_lock_store import RedisLockStore
+from app.core.models.session import Session
+from app.core.models.agent import Agent, AgentExecutionProfile, AgentPromptSource
+from app.core.hooks import ToolHookPipeline
+from app.core.models.run import Run, RunStatus
+from app.core.models.stored_message import StoredMessage
+from app.core.models.event import (
     RunStartedEvent,
     MessageDeltaEvent,
     RunCompletedEvent,
@@ -27,12 +27,12 @@ from app.core.models.event import (  # 导入事件模型
     RequestFailedEvent,
     ToolUseCompletedEvent,
 )
-from app.core.models.error import ErrorCode  # 导入错误码枚举
-from app.core.models.tool import ToolRegistry  # 导入工具注册表
-from app.core.loop.agent_loop import AgentLoop  # 导入 Agent 循环
-from app.config import Settings  # 导入应用配置
-from app.core.runtime.context_builder import ContextCompressionError, ContextTrimPolicy  # 导入上下文策略协议与压缩异常
-from tests.fakes import FakeAgentRuntime  # 导入模拟 Runtime
+from app.core.models.error import ErrorCode
+from app.core.models.tool import ToolRegistry
+from app.core.loop.agent_loop import AgentLoop
+from app.config import Settings
+from app.core.runtime.context_builder import ContextCompressionError, ContextTrimPolicy
+from tests.fakes import FakeAgentRuntime
 
 
 class FakeAgentProvider(AgentProvider):
@@ -50,7 +50,7 @@ class FakeAgentProvider(AgentProvider):
         """
         if profile is not None:  # 使用外部注入的 profile
             self.profile = profile  # 保存外部注入的 profile
-        else:  # 未注入时自动构造默认 profile
+        else:
             agent = Agent(  # 创建默认 Agent 静态配置
                 agent_id="master-agent",
                 name="Master Agent",
@@ -460,7 +460,7 @@ async def test_chat_service_cancel_run_prefers_local_event_over_redis_publish(ch
 @pytest.mark.asyncio
 async def test_chat_service_cancel_run_publishes_when_run_is_not_local(chat_service, monkeypatch):
     """测试本地未命中活跃 run 时，cancel_run 会通过 Redis 广播取消信号。"""
-    published_messages: list[tuple[str, str]] = []  # 记录实际发出的频道与消息，验证广播内容正确
+    published_messages: list[tuple[str, str]] = []
 
     async def fake_publish(channel: str, message: str) -> int:
         """替换 Redis publish，记录广播参数。"""
@@ -1019,7 +1019,7 @@ async def test_chat_service_flushes_background_tool_write_before_terminal_and_lo
     session_store = RedisSessionStore(fake_redis, key_prefix="test")
     original_append = session_store.append_main_message
     tool_write_gate = asyncio.Event()  # 控制 tool 消息后台写入何时放行，验证终态会等待 flush
-    call_order: list[str] = []  # 记录关键步骤顺序，确认锁释放发生在后台写完成之后
+    call_order: list[str] = []
 
     async def controlled_append(
         session_id: str,

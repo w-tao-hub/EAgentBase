@@ -1,15 +1,15 @@
 """SkillTool 单元测试。"""
 
-from __future__ import annotations  # 启用未来注解，避免前向引用问题。
+from __future__ import annotations
 
-from pathlib import Path  # 导入 Path，便于构造临时 skill 目录。
+from pathlib import Path
 
-import pytest  # 导入 pytest，编写异步单元测试。
+import pytest
 
-from app.core.models.agent import Agent  # 导入 Agent，构造执行上下文。
-from app.core.models.execution_context import ExecutionContext  # 导入执行上下文。
-from app.infra.skills.catalog import SkillCatalog  # 导入技能索引，供 SkillTool 使用。
-from app.infra.tools.skill_tool import SkillTool  # 导入被测 SkillTool。
+from app.core.models.agent import Agent
+from app.core.models.execution_context import ExecutionContext
+from app.infra.skills.catalog import SkillCatalog
+from app.infra.tools.skill_tool import SkillTool
 
 
 def _context() -> ExecutionContext:

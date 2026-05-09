@@ -5,15 +5,15 @@ source_history_* 承载输入片段及其绝对索引映射，不保证是 Redis
 active_history_* 承载真正送入 LLM 的活动窗口子集。
 """
 
-from __future__ import annotations  # 启用未来注解，避免前向引用问题
+from __future__ import annotations
 
-from dataclasses import dataclass  # 导入数据类，用于表达不可变视图结构
-from typing import TYPE_CHECKING  # 导入类型检查标记，避免运行时循环依赖
+from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
-from app.core.models.stored_message import StoredMessage  # 导入存储消息模型
+from app.core.models.stored_message import StoredMessage
 
-if TYPE_CHECKING:  # 仅在类型检查阶段导入，避免运行时循环依赖。
-    from app.infra.store.redis_session_store import ContextSummaryState  # Redis 会话存储中的摘要边界状态。
+if TYPE_CHECKING:
+    from app.infra.store.redis_session_store import ContextSummaryState
 
 
 @dataclass(slots=True)
@@ -25,10 +25,10 @@ class ContextHistoryView:
     active_history_* 表示经过摘要压缩后、真正会送入 LLM 的消息子集及其在输入历史中的绝对索引。
     """
 
-    source_history_messages: list[StoredMessage]  # 输入给 builder 的原始消息列表。
-    source_history_indices: list[int]  # 输入消息的绝对索引映射，不保证是 Redis 全量历史的完整索引。
-    active_history_messages: list[StoredMessage]  # 送入 LLM 的活动窗口消息列表。
-    active_history_indices: list[int]  # 活动窗口消息在输入历史中的绝对索引。
+    source_history_messages: list[StoredMessage]
+    source_history_indices: list[int]
+    active_history_messages: list[StoredMessage]
+    active_history_indices: list[int]
 
 
 class ContextHistoryViewBuilder:
@@ -126,8 +126,8 @@ class ContextHistoryViewBuilder:
             )
 
         # 构建活动窗口：摘要消息先行，然后是从起点到末尾的所有非摘要消息。
-        active_history_messages: list[StoredMessage] = [history[summary_index]]  # 首位固定放最近一次摘要消息。
-        active_history_indices: list[int] = [summary_index]  # 首位索引对应摘要消息在完整历史中的位置。
+        active_history_messages: list[StoredMessage] = [history[summary_index]]
+        active_history_indices: list[int] = [summary_index]
         start_index = (
             active_start_index
             if active_start_index is not None and active_start_index <= summary_index

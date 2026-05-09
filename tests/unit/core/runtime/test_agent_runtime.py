@@ -3,16 +3,16 @@
 测试 AgentRuntime 的 stream_once 方法，验证纯文本场景和 tool_calls 场景。
 """
 
-from __future__ import annotations  # # 启用未来注解
+from __future__ import annotations
 
-import pytest  # # 导入 pytest 测试框架
-from dataclasses import dataclass  # # 导入数据类装饰器
-from typing import AsyncIterator, Any  # # 导入异步迭代器和任意类型
+import pytest
+from dataclasses import dataclass
+from typing import AsyncIterator, Any
 
-from app.core.models.agent import Agent  # # 导入 Agent 模型
-from app.core.models.execution_context import ExecutionContext  # # 导入执行上下文模型
-from app.core.models.llm_chunk import LLMChunk  # # 导入 LLMChunk
-from app.core.hooks import (  # # 导入 Hook 相关模型
+from app.core.models.agent import Agent
+from app.core.models.execution_context import ExecutionContext
+from app.core.models.llm_chunk import LLMChunk
+from app.core.hooks import (
     HookExecutionError,
     ModelHook,
     ModelHookPipeline,
@@ -21,7 +21,7 @@ from app.core.hooks import (  # # 导入 Hook 相关模型
     NoOpStreamTextGuard,
     StreamTextGuard,
 )
-from app.core.runtime.agent_runtime import (  # # 导入被测类和数据类
+from app.core.runtime.agent_runtime import (
     AgentRuntime,
     TurnComplete,
     ToolCall,

@@ -3,25 +3,25 @@
 测试 POST /chat 接口的 SSE 流式响应行为。
 """
 
-from __future__ import annotations  # 启用未来注解
+from __future__ import annotations
 
-import asyncio  # 导入 asyncio，用于构造慢速流式替身与并发断连回归测试
+import asyncio
 
-import pytest  # 导入 pytest 测试框架
-import pytest_asyncio  # 导入 pytest 异步支持
-from httpx import ASGITransport, AsyncClient  # 导入异步 HTTP 客户端
+import pytest
+import pytest_asyncio
+from httpx import ASGITransport, AsyncClient
 
-import fakeredis.aioredis  # 导入 fakeredis 异步实现
+import fakeredis.aioredis
 
-from app.bootstrap.container import Container  # 导入容器，便于 patch Redis 创建点
-from app.bootstrap.factory import bootstrap_app  # 导入公开启动入口，复用真实 bootstrap 路径
-from app.core.models.execution_context import ExecutionContext  # 导入执行上下文，供测试替身工具签名使用。
-from app.core.models.tool import Tool, ToolResult  # 导入工具抽象与工具结果，构造测试替身工具。
-from app.infra.store.redis_session_store import RedisSessionStore  # 导入会话存储，验证历史消息被替换为占位文本。
-import app.infra.llm.litellm_adapter as litellm_adapter_module  # 导入适配器模块，便于 patch 容器内部创建点
-from tests.fakes import FakeLLMAdapter  # 导入测试假实现
-from tests.helpers.sse import collect_sse_events  # 导入 SSE 解析工具
-from app.core.models.llm_chunk import LLMChunk  # 导入统一 chunk 模型，构造假 LLM 输出
+from app.bootstrap.container import Container
+from app.bootstrap.factory import bootstrap_app
+from app.core.models.execution_context import ExecutionContext
+from app.core.models.tool import Tool, ToolResult
+from app.infra.store.redis_session_store import RedisSessionStore
+import app.infra.llm.litellm_adapter as litellm_adapter_module
+from tests.fakes import FakeLLMAdapter
+from tests.helpers.sse import collect_sse_events
+from app.core.models.llm_chunk import LLMChunk
 
 
 class StubLargeResultTool(Tool):
@@ -68,16 +68,11 @@ class StubMCPClientManager:
 
 
 class SlowStreamingLLMAdapter:
-    """慢速流式 LLM 适配器替身。
-
-    该替身持续输出大量 chunk，并在每个 chunk 之间 sleep，
-    以稳定拉长 SSE 生命周期，便于测试客户端并发断连后的清理与终态收敛。
-    """
+    """慢速流式 LLM 适配器替身。用于测试客户端并发断连后的清理与终态收敛。"""
 
     def __init__(self, total_chunks: int = 500, delay_seconds: float = 0.01) -> None:
-        """保存流式输出参数。"""
-        self._total_chunks = total_chunks  # 输出 chunk 总数，数量足够大以保证测试有时间主动断开连接
-        self._delay_seconds = delay_seconds  # 每个 chunk 间的延迟，模拟真实模型的流式输出节奏
+        self._total_chunks = total_chunks
+        self._delay_seconds = delay_seconds
 
     async def stream_completion(
         self,
@@ -89,131 +84,108 @@ class SlowStreamingLLMAdapter:
         reasoning_effort: str | None = None,
     ):
         """持续输出文本 chunk，直到被上游取消。"""
-        del model, messages, temperature, api_key, tools, reasoning_effort  # 测试替身不消费入参，只保留兼容签名
-        for index in range(self._total_chunks):  # 连续输出多个 chunk，保证 SSE 连接维持足够长时间
-            await asyncio.sleep(self._delay_seconds)  # 每个 chunk 之间短暂让出事件循环，便于并发断连竞态稳定复现
-            yield LLMChunk(content=f"{index}\n")  # 返回简单文本 chunk，避免引入工具调用等额外变量
+        del model, messages, temperature, api_key, tools, reasoning_effort
+        for index in range(self._total_chunks):
+            await asyncio.sleep(self._delay_seconds)
+            yield LLMChunk(content=f"{index}\n")
 
 
 def _patch_container_redis(monkeypatch, redis) -> None:
     """统一替换容器中的主 Redis 与 pubsub Redis 创建点。"""
-    monkeypatch.setattr(Container, "_create_redis", staticmethod(lambda settings: redis))  # 拦截主 Redis 创建，改为返回 fakeredis
-    monkeypatch.setattr(Container, "_create_pubsub_redis", staticmethod(lambda settings: redis))  # 拦截 pubsub Redis 创建，复用同一 fakeredis 替身
+    monkeypatch.setattr(Container, "_create_redis", staticmethod(lambda settings: redis))
+    monkeypatch.setattr(Container, "_create_pubsub_redis", staticmethod(lambda settings: redis))
 
 
 async def _read_first_sse_event(response) -> tuple[str, dict]:
     """从流式响应中读取第一个完整 SSE 事件。"""
-    event_name = ""  # 保存当前事件名称
-    data_lines: list[str] = []  # 保存当前事件的 data 行，支持未来扩展多行 data
-    async for line in response.aiter_lines():  # 按行读取 SSE 流
+    event_name = ""
+    data_lines: list[str] = []
+    async for line in response.aiter_lines():
         if line.startswith("event:"):
-            event_name = line[len("event:"):].strip()  # 提取事件名称
+            event_name = line[len("event:"):].strip()
             continue
         if line.startswith("data:"):
-            data_lines.append(line[len("data:"):].strip())  # 收集 JSON payload 行
+            data_lines.append(line[len("data:"):].strip())
             continue
-        if line == "" and event_name and data_lines:  # 空行表示一个 SSE 事件结束
-            import json  # 延迟导入 JSON，仅在解析首个事件时使用
+        if line == "" and event_name and data_lines:
+            import json
 
-            return event_name, json.loads("".join(data_lines))  # 返回完整事件，供测试读取 run_id
-    raise AssertionError("未读取到完整 SSE 事件")  # 若流意外结束仍未拿到首个事件，则测试应直接失败
+            return event_name, json.loads("".join(data_lines))
+    raise AssertionError("未读取到完整 SSE 事件")
 
 
 async def _wait_run_cancelled(client: AsyncClient, run_id: str, timeout_seconds: float = 5.0) -> dict:
     """轮询等待指定 run 收敛为 cancelled。"""
-    deadline = asyncio.get_running_loop().time() + timeout_seconds  # 记录超时时刻，避免无限等待
-    latest_payload: dict | None = None  # 保存最后一次查询结果，便于超时后打印上下文
-    while asyncio.get_running_loop().time() < deadline:  # 在超时窗口内持续轮询 run 详情
-        response = await client.get(f"/runs/{run_id}")  # 查询当前 run 状态
-        latest_payload = response.json()  # 读取响应体，供状态判断与超时诊断复用
-        if latest_payload.get("status") == "cancelled":  # run 进入取消终态时立即返回
+    deadline = asyncio.get_running_loop().time() + timeout_seconds
+    latest_payload: dict | None = None
+    while asyncio.get_running_loop().time() < deadline:
+        response = await client.get(f"/runs/{run_id}")
+        latest_payload = response.json()
+        if latest_payload.get("status") == "cancelled":
             return latest_payload
-        await asyncio.sleep(0.05)  # 短暂等待后继续轮询，兼顾稳定性与测试速度
-    raise AssertionError(f"run 未在超时内收敛为 cancelled: run_id={run_id}, payload={latest_payload}")  # 超时则带上最后一次状态帮助定位问题
+        await asyncio.sleep(0.05)
+    raise AssertionError(f"run 未在超时内收敛为 cancelled: run_id={run_id}, payload={latest_payload}")
 
 
-@pytest_asyncio.fixture  # 定义异步夹具
+@pytest_asyncio.fixture
 async def chat_client(monkeypatch):
-    """提供注入假依赖的异步 HTTP 测试客户端。
-
-    使用 fakeredis 和 FakeLLMAdapter 替代真实依赖，
-    避免测试依赖外部服务。
-    """
-    # 创建 fakeredis 实例
+    """提供注入假依赖的异步 HTTP 测试客户端。"""
     redis = fakeredis.aioredis.FakeRedis(decode_responses=True)
 
-    # 创建假的 LLM 适配器，预设一个正常完成的文本输出序列。
     fake_llm_adapter = FakeLLMAdapter(chunks=[
-        LLMChunk(content="Hello"),  # 第一个文本分片
-        LLMChunk(content=" world"),  # 第二个文本分片
+        LLMChunk(content="Hello"),
+        LLMChunk(content=" world"),
     ])
-    monkeypatch.setattr(  # 拦截真实适配器创建，改为返回测试替身
+    monkeypatch.setattr(
         litellm_adapter_module,
         "LiteLLMAdapter",
         lambda *args, **kwargs: fake_llm_adapter,
     )
-    _patch_container_redis(monkeypatch, redis)  # 统一拦截主 Redis 与 pubsub Redis 创建，避免测试触碰真实 Redis
+    _patch_container_redis(monkeypatch, redis)
 
-    # 通过应用工厂创建 FastAPI 实例，注入假依赖
     app = bootstrap_app()
 
-    # 构造异步测试客户端
-    transport = ASGITransport(app=app)  # 创建 ASGI 传输层
+    transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
-        yield client  # 提供客户端给测试函数
+        yield client
 
-    # 清理：关闭 fakeredis 连接
     await redis.aclose()
 
 
-@pytest.mark.asyncio  # 标记为异步测试
+@pytest.mark.asyncio
 async def test_chat_sse_emits_expected_event_order(chat_client):
-    """测试聊天 SSE 事件按照预期顺序发出。
+    """测试聊天 SSE 事件按照预期顺序发出。"""
+    create_resp = await chat_client.post("/sessions")
+    session_id = create_resp.json()["session_id"]
 
-    验证事件顺序为：run_started -> message_delta(多个) -> run_completed
-    """
-    # 先创建一个会话
-    create_resp = await chat_client.post("/sessions")  # 创建会话
-    session_id = create_resp.json()["session_id"]  # 获取 session_id
-
-    # 发送聊天请求并收集 SSE 事件
     events = await collect_sse_events(
-        chat_client,  # 测试客户端
-        "/chat",  # 请求 URL
-        json={"session_id": session_id, "message": "Hi"},  # 请求体
+        chat_client,
+        "/chat",
+        json={"session_id": session_id, "message": "Hi"},
     )
 
-    # 验证至少发出了事件
-    assert len(events) > 0  # 应该有事件
+    assert len(events) > 0
 
-    # 验证事件名称序列
-    event_names = [e["event"] for e in events]  # 提取事件名称列表
-    assert event_names[0] == "run_started"  # 第一个事件是 run_started
-    assert event_names[-1] == "run_completed"  # 最后一个事件是 run_completed
+    event_names = [e["event"] for e in events]
+    assert event_names[0] == "run_started"
+    assert event_names[-1] == "run_completed"
 
-    # 验证中间有 message_delta 事件
-    delta_events = [e for e in events if e["event"] == "message_delta"]  # 过滤增量事件
-    assert len(delta_events) > 0  # 应该有增量事件
+    delta_events = [e for e in events if e["event"] == "message_delta"]
+    assert len(delta_events) > 0
 
 
-@pytest.mark.asyncio  # 标记为异步测试
+@pytest.mark.asyncio
 async def test_chat_sse_with_missing_session_returns_request_failed(chat_client):
     """测试聊天时使用不存在的 session_id 返回 request_failed SSE 事件。"""
-    # 发送聊天请求，使用不存在的 session_id
     events = await collect_sse_events(
-        chat_client,  # 测试客户端
-        "/chat",  # 请求 URL
-        json={"session_id": "nonexistent-session", "message": "Hi"},  # 不存在的会话
+        chat_client,
+        "/chat",
+        json={"session_id": "nonexistent-session", "message": "Hi"},
     )
 
-    # 验证返回了 request_failed 事件
-    assert len(events) > 0  # 应该有事件
-
-    # 第一个事件应该是 request_failed
-    assert events[0]["event"] == "request_failed"  # 事件类型
-
-    # 验证错误码
-    assert events[0]["data"]["error_code"] == "SESSION_NOT_FOUND"  # 错误码匹配
+    assert len(events) > 0
+    assert events[0]["event"] == "request_failed"
+    assert events[0]["data"]["error_code"] == "SESSION_NOT_FOUND"
 
 
 @pytest.mark.asyncio  # 标记为异步测试
@@ -233,69 +205,57 @@ async def test_chat_validation_error_response_omits_details(chat_client):
     assert "details" not in payload
 
 
-@pytest.mark.asyncio  # 标记为异步测试
+@pytest.mark.asyncio
 async def test_chat_sse_with_metadata(chat_client):
     """测试聊天时传递 metadata 参数不影响正常事件流。"""
-    # 先创建一个会话
-    create_resp = await chat_client.post("/sessions")  # 创建会话
-    session_id = create_resp.json()["session_id"]  # 获取 session_id
+    create_resp = await chat_client.post("/sessions")
+    session_id = create_resp.json()["session_id"]
 
-    # 发送带 metadata 的聊天请求
     events = await collect_sse_events(
-        chat_client,  # 测试客户端
-        "/chat",  # 请求 URL
+        chat_client,
+        "/chat",
         json={
-            "session_id": session_id,  # 会话 ID
-            "message": "Hi",  # 用户消息
-            "metadata": {"source": "test", "version": "1.0"},  # 元数据
+            "session_id": session_id,
+            "message": "Hi",
+            "metadata": {"source": "test", "version": "1.0"},
         },
     )
 
-    # 验证正常完成（metadata 不影响事件流）
-    assert len(events) > 0  # 应该有事件
-    event_names = [e["event"] for e in events]  # 提取事件名称列表
-    assert event_names[0] == "run_started"  # 第一个事件是 run_started
-    assert event_names[-1] == "run_completed"  # 最后一个事件是 run_completed
+    assert len(events) > 0
+    event_names = [e["event"] for e in events]
+    assert event_names[0] == "run_started"
+    assert event_names[-1] == "run_completed"
 
 
-@pytest.mark.asyncio  # 标记为异步测试
+@pytest.mark.asyncio
 async def test_chat_multi_turn_conversation(chat_client):
     """测试多轮对话：多次发送消息，验证消息计数递增。"""
-    # 先创建一个会话
-    create_resp = await chat_client.post("/sessions")  # 创建会话
-    session_id = create_resp.json()["session_id"]  # 获取 session_id
+    create_resp = await chat_client.post("/sessions")
+    session_id = create_resp.json()["session_id"]
 
-    # 第一轮对话
     events1 = await collect_sse_events(
-        chat_client,  # 测试客户端
-        "/chat",  # 请求 URL
-        json={"session_id": session_id, "message": "Hello"},  # 第一轮消息
+        chat_client,
+        "/chat",
+        json={"session_id": session_id, "message": "Hello"},
     )
-    # 验证第一轮正常完成
-    assert len(events1) > 0  # 应该有事件
-    assert events1[-1]["event"] == "run_completed"  # 最后一个事件是 run_completed
+    assert len(events1) > 0
+    assert events1[-1]["event"] == "run_completed"
 
-    # 查询会话状态，验证消息数量
-    session_resp = await chat_client.get(f"/sessions/{session_id}")  # 查询会话
-    session_data = session_resp.json()  # 获取会话数据
-    # 第一轮完成后：1 条用户消息 + 1 条助手消息 = 2 条
-    assert session_data["message_count"] == 2  # 消息数量为 2
+    session_resp = await chat_client.get(f"/sessions/{session_id}")
+    session_data = session_resp.json()
+    assert session_data["message_count"] == 2
 
-    # 第二轮对话
     events2 = await collect_sse_events(
-        chat_client,  # 测试客户端
-        "/chat",  # 请求 URL
-        json={"session_id": session_id, "message": "How are you?"},  # 第二轮消息
+        chat_client,
+        "/chat",
+        json={"session_id": session_id, "message": "How are you?"},
     )
-    # 验证第二轮正常完成
-    assert len(events2) > 0  # 应该有事件
-    assert events2[-1]["event"] == "run_completed"  # 最后一个事件是 run_completed
+    assert len(events2) > 0
+    assert events2[-1]["event"] == "run_completed"
 
-    # 再次查询会话状态，验证消息数量递增
-    session_resp2 = await chat_client.get(f"/sessions/{session_id}")  # 再次查询会话
-    session_data2 = session_resp2.json()  # 获取会话数据
-    # 第二轮完成后：4 条（第一轮 2 条 + 第二轮 2 条）
-    assert session_data2["message_count"] == 4  # 消息数量为 4
+    session_resp2 = await chat_client.get(f"/sessions/{session_id}")
+    session_data2 = session_resp2.json()
+    assert session_data2["message_count"] == 4
 
 
 @pytest.mark.asyncio  # 标记为异步测试

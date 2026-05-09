@@ -1,6 +1,6 @@
 """Hook 相关异常定义。"""
 
-from __future__ import annotations  # 启用未来注解，避免运行时前向引用问题
+from __future__ import annotations
 
 
 class HookExecutionError(RuntimeError):
@@ -18,7 +18,7 @@ class HookExecutionError(RuntimeError):
             hook_name: 抛出异常的 Hook 类型名
             original_exception: 原始异常对象
         """
-        self.stage = stage  # 保存失败阶段，供上层分类处理
-        self.hook_name = hook_name  # 保存 Hook 名称，便于日志定位
-        self.original_exception = original_exception  # 保存原始异常对象
-        super().__init__(f"Hook 执行失败[{stage}:{hook_name}]: {original_exception}")  # 生成稳定错误消息
+        self.stage = stage
+        self.hook_name = hook_name
+        self.original_exception = original_exception
+        super().__init__(f"Hook 执行失败[{stage}:{hook_name}]: {original_exception}")

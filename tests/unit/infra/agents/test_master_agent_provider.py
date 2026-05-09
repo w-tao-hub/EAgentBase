@@ -5,21 +5,21 @@
 - load_master_agent() 工具函数从 Settings 和文件加载主 Agent 元信息
 """
 
-from __future__ import annotations  # 启用未来注解，避免前向引用问题
+from __future__ import annotations
 
-import pytest  # 导入 pytest 测试框架
+import pytest
 
-from app.config import Settings  # 导入应用配置
-from app.core.hooks import ToolHookPipeline  # 导入工具 Hook 管线
-from app.core.models.agent import AgentExecutionProfile, AgentPromptSource  # 导入执行配置和 prompt 来源
-from app.core.models.error import ErrorCode  # 导入错误码枚举
-from app.core.models.tool import ToolRegistry  # 导入工具注册表
-from app.infra.agents.master_agent_provider import (  # 导入被试模块
+from app.config import Settings
+from app.core.hooks import ToolHookPipeline
+from app.core.models.agent import AgentExecutionProfile, AgentPromptSource
+from app.core.models.error import ErrorCode
+from app.core.models.tool import ToolRegistry
+from app.infra.agents.master_agent_provider import (
     MasterAgentProvider,  # 多 profile 注册中心
     _CURRENT_DIR,  # 主智能体提示词文件所在目录
     load_master_agent,  # 主 Agent 加载工具函数
 )
-from tests.fakes import FakeAgentRuntime, create_fake_agent  # 导入测试替身
+from tests.fakes import FakeAgentRuntime, create_fake_agent
 
 
 # ============================================================================

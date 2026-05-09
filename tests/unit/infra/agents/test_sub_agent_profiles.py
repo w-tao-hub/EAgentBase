@@ -132,7 +132,7 @@ def test_profile_builder_rejects_invalid_hook_profile(tmp_path: Path) -> None:
     当默认子代理定义中 hook_profile 指向一个未在 HookProfileRegistry
     中注册的名称时，SubAgentProfileBuilder.build_default_profile 应抛异常。
     """
-    from app.config import Settings  # 导入应用配置
+    from app.config import Settings
 
     prompt_file = tmp_path / "plan.md"  # 创建临时 prompt 文件
     prompt_file.write_text("你是计划代理。", encoding="utf-8")  # 写入测试 prompt 内容

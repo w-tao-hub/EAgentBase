@@ -1,10 +1,10 @@
 """RedisLockStore 的单元测试。"""
 
-from __future__ import annotations  # 启用未来注解
+from __future__ import annotations
 
-import pytest  # 导入 pytest 测试框架
+import pytest
 
-from app.infra.store.redis_lock_store import RedisLockStore  # 导入被测类
+from app.infra.store.redis_lock_store import RedisLockStore
 
 
 @pytest.mark.asyncio  # 标记为异步测试

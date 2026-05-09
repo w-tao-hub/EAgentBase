@@ -1,13 +1,13 @@
 """ChatRunLockScope 单元测试。"""
 
-from __future__ import annotations  # 启用未来注解
+from __future__ import annotations
 
-import asyncio  # 导入 asyncio，用于等待后台心跳触发
+import asyncio
 
-import pytest  # 导入 pytest，用于异步测试与异常断言
+import pytest
 
-from app.infra.store.redis_lock_store import RedisLockStore  # 导入 Redis 锁存储实现
-from app.services.chat_run_lock import (  # 导入待测锁作用域
+from app.infra.store.redis_lock_store import RedisLockStore
+from app.services.chat_run_lock import (
     ChatRunLockHeartbeatLostError,
     ChatRunLockNotAcquiredError,
     ChatRunLockScope,

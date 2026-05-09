@@ -1,16 +1,16 @@
 """ContextBuilder 的单元测试。"""
 
-from __future__ import annotations  # 启用未来注解，避免前向引用问题
+from __future__ import annotations
 
-from datetime import datetime, timezone  # 导入日期时间类和 UTC 时区
+from datetime import datetime, timezone
 
-import pytest  # 导入 pytest 测试框架
+import pytest
 
-from app.core.models.agent import Agent  # 导入 Agent 模型
-from app.core.models.stored_message import StoredMessage  # 导入会话消息模型
-from app.core.runtime.context_builder import ContextBuilder, SummaryPersistenceTarget, TokenBudgetCompressionPolicy  # 导入上下文构建器与压缩策略
-from app.infra.store.redis_session_store import RedisSessionStore  # 导入 Redis 会话存储
-from tests.fakes import FakeLLMAdapter  # 导入测试用假的 LiteLLM 适配器
+from app.core.models.agent import Agent
+from app.core.models.stored_message import StoredMessage
+from app.core.runtime.context_builder import ContextBuilder, SummaryPersistenceTarget, TokenBudgetCompressionPolicy
+from app.infra.store.redis_session_store import RedisSessionStore
+from tests.fakes import FakeLLMAdapter
 
 
 @pytest.mark.asyncio

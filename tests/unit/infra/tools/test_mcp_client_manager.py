@@ -1,17 +1,17 @@
 """MCP 客户端管理器单元测试。"""
 
-from __future__ import annotations  # 启用未来注解，避免前向引用问题。
+from __future__ import annotations
 
-import asyncio  # 导入 asyncio，用于断言上下文进入与退出发生在同一任务。
-from concurrent.futures import Future  # 导入 Future，用于驱动生命周期协程完成启动握手。
-from datetime import timedelta  # 导入 timedelta，用于断言超时参数透传。
-from pathlib import Path  # 导入 Path，用于构造临时配置文件路径。
-from types import SimpleNamespace  # 导入轻量命名空间，便于伪造模块对象。
+import asyncio
+from concurrent.futures import Future
+from datetime import timedelta
+from pathlib import Path
+from types import SimpleNamespace
 
-import pytest  # 导入 pytest 测试框架。
+import pytest
 
-from app.config import Settings  # 导入 Settings，用于验证 from_settings 行为。
-from app.infra.tools.mcp_client_manager import MCPClientManager, MCPConnection, MCPServerConfig  # 导入被测对象。
+from app.config import Settings
+from app.infra.tools.mcp_client_manager import MCPClientManager, MCPConnection, MCPServerConfig
 
 
 class FakeToolItem:  # 定义工具描述替身。
@@ -122,7 +122,7 @@ class FakeClosableContext:  # 定义最小可关闭上下文替身。
 class FakeClientSessionContext:  # 定义 ClientSession 上下文替身。
     """模拟可进入的 ClientSession 上下文。"""
 
-    last_instance: "FakeClientSessionContext | None" = None  # 保存最后一次构造的实例，便于断言参数透传。
+    last_instance: "FakeClientSessionContext | None" = None
 
     def __init__(self, read_stream, write_stream, read_timeout_seconds=None, **kwargs) -> None:  # 定义初始化方法。
         """保存初始化参数。"""
@@ -150,7 +150,7 @@ class FakeClientSessionContext:  # 定义 ClientSession 上下文替身。
 class FakeStdioServerParameters:  # 定义 stdio 参数对象替身。
     """模拟 MCP SDK 的 StdioServerParameters。"""
 
-    last_instance: "FakeStdioServerParameters | None" = None  # 保存最后一次构造实例，便于断言字段透传。
+    last_instance: "FakeStdioServerParameters | None" = None
 
     def __init__(self, *, command: str, args: list[str], env: dict[str, str] | None, cwd: str | None) -> None:  # 定义初始化方法。
         """保存所有输入字段。"""
@@ -227,7 +227,7 @@ class FakeHTTPXTimeout:  # 定义 httpx.Timeout 替身。
 class FakeHTTPXModule:  # 定义 httpx 模块替身。
     """模拟最小 httpx 模块。"""
 
-    last_async_client_kwargs: dict | None = None  # 保存最后一次 AsyncClient 构造参数。
+    last_async_client_kwargs: dict | None = None
 
     Timeout = FakeHTTPXTimeout  # 把 Timeout 类型映射到测试替身。
 
@@ -407,7 +407,7 @@ async def test_run_lifecycle_skips_disabled_configs(monkeypatch) -> None:  # 定
         MCPServerConfig(server_id="enabled", transport="stdio", enabled=True, command="demo"),  # 启用服务。
     ]
     manager = MCPClientManager(config_path="unused.json", configs=configs)  # 创建管理器实例。
-    opened_server_ids: list[str] = []  # 记录真正进入连接打开阶段的服务标识。
+    opened_server_ids: list[str] = []
 
     async def fake_open_connection(config: MCPServerConfig) -> MCPConnection:  # 定义连接打开替身。
         """只记录启用配置的 server_id。"""
@@ -428,7 +428,7 @@ async def test_run_lifecycle_skips_disabled_configs(monkeypatch) -> None:  # 定
     monkeypatch.setattr(manager, "_open_connection", fake_open_connection)  # 拦截真实连接建立。
     monkeypatch.setattr(manager, "_list_all_tool_items", fake_list_all_tool_items)  # 拦截真实工具发现。
 
-    started_future: Future[None] = Future()  # 创建启动同步句柄。
+    started_future: Future[None] = Future()
     await manager._run_lifecycle(started_future)  # 直接执行生命周期协程。
 
     assert opened_server_ids == ["enabled"]  # 断言仅启用服务进入了打开阶段。
@@ -542,7 +542,7 @@ async def test_open_streamable_http_connection_uses_managed_http_client(monkeypa
     manager = MCPClientManager(config_path="unused.json", configs=[])  # 创建最小管理器实例。
     http_client = FakeHTTPClient()  # 创建 http client 替身。
     transport_context = FakeStreamableHTTPTransportContext()  # 创建 transport 上下文替身。
-    called: dict[str, object] = {}  # 记录 transport 构造调用参数。
+    called: dict[str, object] = {}
 
     def fake_streamable_http_client(url: str, *, http_client: FakeHTTPClient):  # 定义 transport 构造替身。
         """记录入参并返回 transport 上下文。"""

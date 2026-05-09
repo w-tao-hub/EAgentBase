@@ -8,29 +8,29 @@
 - 不同 child 上下文不互相污染
 """
 
-from __future__ import annotations  # 启用未来注解
+from __future__ import annotations
 
-import json  # 导入 JSON 模块，用于序列化工具调用参数
-from datetime import datetime, timezone  # 导入日期时间类，用于构造 Session 和消息时间戳
+import json
+from datetime import datetime, timezone
 
-import pytest  # 导入 pytest 测试框架
+import pytest
 
-from app.config import Settings  # 导入应用配置类
-from app.core.hooks import ToolHookPipeline  # 导入工具 Hook 管线（空链）
-from app.core.loop.agent_loop import AgentLoop  # 导入 AgentLoop 编排器
-from app.core.models.agent import Agent, AgentExecutionProfile, AgentPromptSource  # 导入 Agent 相关模型
-from app.core.models.execution_context import ExecutionContext  # 导入执行上下文模型
-from app.core.models.run import Run, RunStatus, RunType  # 导入 Run 模型和状态枚举
-from app.core.models.session import Session  # 导入 Session 模型
-from app.core.models.tool import ToolRegistry  # 导入工具注册表
-from app.core.runtime.agent_runtime import Function, ToolCall, TurnComplete  # 导入运行时类型
-from app.infra.store.redis_run_store import RedisRunStore  # 导入 Redis Run 存储
-from app.infra.store.redis_session_store import RedisSessionStore, SessionChildSummary  # 导入 Session 存储和 child 摘要数据类
-from app.infra.tools.list_resumable_subagents_tool import ListResumableSubagentsTool  # 导入可恢复子代理查询工具
-from app.infra.tools.task_tool import TaskTool  # 导入 Task 工具
-from app.services.chat_event_processor import ChatEventProcessor  # 导入聊天事件分发器
-from app.services.child_agent_runner import ChildAgentRunner  # 导入子代理执行服务
-from tests.fakes import FakeAgentRuntime  # 导入假运行时
+from app.config import Settings
+from app.core.hooks import ToolHookPipeline
+from app.core.loop.agent_loop import AgentLoop
+from app.core.models.agent import Agent, AgentExecutionProfile, AgentPromptSource
+from app.core.models.execution_context import ExecutionContext
+from app.core.models.run import Run, RunStatus, RunType
+from app.core.models.session import Session
+from app.core.models.tool import ToolRegistry
+from app.core.runtime.agent_runtime import Function, ToolCall, TurnComplete
+from app.infra.store.redis_run_store import RedisRunStore
+from app.infra.store.redis_session_store import RedisSessionStore, SessionChildSummary
+from app.infra.tools.list_resumable_subagents_tool import ListResumableSubagentsTool
+from app.infra.tools.task_tool import TaskTool
+from app.services.chat_event_processor import ChatEventProcessor
+from app.services.child_agent_runner import ChildAgentRunner
+from tests.fakes import FakeAgentRuntime
 
 
 @pytest.mark.asyncio  # 标记为异步测试

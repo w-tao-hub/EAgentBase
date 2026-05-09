@@ -1,22 +1,22 @@
 """Container Hook 装配测试。"""
 
-from __future__ import annotations  # 启用未来注解
+from __future__ import annotations
 
-import json  # 导入 JSON 模块，解析任务工具返回内容。
-from pathlib import Path  # 导入 Path，用于构造临时 skill 目录。
+import json
+from pathlib import Path
 
-import pytest  # 导入 pytest 测试框架
+import pytest
 
-import app.infra.llm.litellm_adapter as litellm_adapter_module  # 导入适配器模块，便于 patch 容器内部创建点
-from app.bootstrap.container import Container  # 导入被测容器
-from app.config import Settings  # 导入配置模型
-from app.core.models.execution_context import ExecutionContext  # 导入执行上下文模型，供假工具签名使用。
-from app.core.hooks import (  # 导入默认日志 Hook 类型
+import app.infra.llm.litellm_adapter as litellm_adapter_module
+from app.bootstrap.container import Container
+from app.config import Settings
+from app.core.models.execution_context import ExecutionContext
+from app.core.hooks import (
     NoOpStreamTextGuard,
     PersistLargeToolResultHook,
 )
-from app.core.models.tool import Tool, ToolResult  # 导入工具抽象与结果模型，供假工具使用。
-from app.core.runtime.agent_runtime import AgentRuntime  # 导入真实运行时，验证容器内部创建结果
+from app.core.models.tool import Tool, ToolResult
+from app.core.runtime.agent_runtime import AgentRuntime
 
 
 class StubLLMAdapter:
@@ -32,53 +32,45 @@ class StubLLMAdapter:
             yield None
 
 
-class StubMCPTool(Tool):  # 定义 MCP 工具替身。
-    """模拟 MCP 工具注册结果。"""
+class StubMCPTool(Tool):
+    """模拟 MCP 工具。"""
 
-    def __init__(self, tool_name: str) -> None:  # 定义初始化方法。
-        """保存工具名称。"""
-        self._tool_name = tool_name  # 保存工具名称。
+    def __init__(self, tool_name: str) -> None:
+        self._tool_name = tool_name
 
-    @property  # 声明名称属性。
-    def name(self) -> str:  # 定义名称属性。
-        """返回工具名称。"""
-        return self._tool_name  # 返回工具名称。
+    @property
+    def name(self) -> str:
+        return self._tool_name
 
-    @property  # 声明描述属性。
-    def description(self) -> str:  # 定义描述属性。
-        """返回工具描述。"""
-        return "stub mcp tool"  # 返回固定描述。
+    @property
+    def description(self) -> str:
+        return "stub mcp tool"
 
-    @property  # 声明输入模式属性。
-    def input_schema(self) -> dict:  # 定义输入模式属性。
-        """返回输入模式。"""
-        return {"type": "object"}  # 返回最小输入模式。
+    @property
+    def input_schema(self) -> dict:
+        return {"type": "object"}
 
-    async def call(self, input: dict, context: ExecutionContext) -> ToolResult:  # 定义异步调用方法。
-        """返回固定成功结果。"""
-        return ToolResult(content="ok", is_error=False)  # 返回固定成功结果。
+    async def call(self, input: dict, context: ExecutionContext) -> ToolResult:
+        return ToolResult(content="ok", is_error=False)
 
 
-class StubMCPClientManager:  # 定义 MCP 客户端管理器替身。
+class StubMCPClientManager:
     """模拟容器内的 MCP 管理器。"""
 
-    def __init__(self, tools: list[Tool]) -> None:  # 定义初始化方法。
-        """保存发现到的工具列表。"""
-        self._tools = tools  # 保存工具列表。
-        self.closed = False  # 记录是否已关闭。
+    def __init__(self, tools: list[Tool]) -> None:
+        self._tools = tools
+        self.closed = False
 
-    def list_tools(self) -> list[Tool]:  # 定义列出工具方法。
-        """返回发现到的工具列表。"""
-        return list(self._tools)  # 返回工具副本，避免外部直接修改内部状态。
+    def list_tools(self) -> list[Tool]:
+        return list(self._tools)
 
-    async def aclose(self) -> None:  # 定义异步关闭方法。
-        """记录关闭动作。"""
-        self.closed = True  # 标记管理器已关闭。
+    async def aclose(self) -> None:
+        self.closed = True
 
 
 def _build_tool_context(session_id: str = "task-smoke") -> ExecutionContext:
     """构造任务工具冒烟测试所需的执行上下文。"""
-    from app.core.models.agent import Agent  # 延迟导入 Agent，避免测试模块顶部引入额外依赖。
+    from app.core.models.agent import Agent
 
     agent = Agent(  # 构造最小可用的 Agent 配置。
         agent_id="agent-smoke",  # 设置固定的测试 Agent ID。
@@ -219,7 +211,7 @@ async def test_container_startup_starts_cancel_listener_and_warms_main_pool(fake
 
     container = Container.create(settings=Settings(redis_url="redis://localhost:6379"))  # 创建容器，后续验证 startup 行为
     start_listener_calls = 0  # 记录聊天服务取消监听器的启动次数
-    warmup_calls: list[tuple[object, int]] = []  # 记录主 Redis 连接池预热调用参数
+    warmup_calls: list[tuple[object, int]] = []
 
     async def fake_start_cancel_listener() -> bool:
         """替换聊天服务监听器启动逻辑，只记录调用次数。"""
@@ -303,11 +295,11 @@ async def test_container_registers_task_tools(fake_redis, monkeypatch) -> None:
 
     tool_registry = container._agent_provider.get_default_profile().tool_registry  # 读取工具注册表。
 
-    from app.infra.tools.plan_create_tool import PlanCreateTool  # 导入计划创建工具类型用于断言。
-    from app.infra.tools.plan_get_tool import PlanGetTool  # 导入计划获取工具类型用于断言。
-    from app.infra.tools.plan_list_tool import PlanListTool  # 导入计划列表工具类型用于断言。
-    from app.infra.tools.query_tool_result_tool import QueryToolResultTool  # 导入结果查询工具类型用于断言。
-    from app.infra.tools.plan_update_tool import PlanUpdateTool  # 导入计划更新工具类型用于断言。
+    from app.infra.tools.plan_create_tool import PlanCreateTool
+    from app.infra.tools.plan_get_tool import PlanGetTool
+    from app.infra.tools.plan_list_tool import PlanListTool
+    from app.infra.tools.query_tool_result_tool import QueryToolResultTool
+    from app.infra.tools.plan_update_tool import PlanUpdateTool
 
     create_tool = tool_registry.get("plan_create")
     get_tool = tool_registry.get("plan_get")

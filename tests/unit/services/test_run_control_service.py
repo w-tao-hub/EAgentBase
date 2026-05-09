@@ -1,15 +1,15 @@
 """RunControlService 单元测试。"""
 
-from __future__ import annotations  # 启用未来注解
+from __future__ import annotations
 
-from datetime import datetime, timezone  # 导入日期时间类和 UTC 时区
+from datetime import datetime, timezone
 
-import pytest  # 导入 pytest 测试框架
+import pytest
 
-from app.services.run_control_service import RunControlService  # 导入被测服务
-from app.infra.store.redis_run_store import RedisRunStore  # 导入 Run 存储
-from app.core.models.run import Run, RunStatus  # 导入 Run 模型和状态枚举
-from app.core.models.error import ErrorCode  # 导入错误码枚举
+from app.services.run_control_service import RunControlService
+from app.infra.store.redis_run_store import RedisRunStore
+from app.core.models.run import Run, RunStatus
+from app.core.models.error import ErrorCode
 
 
 @pytest.fixture  # 定义 pytest 夹具
@@ -46,7 +46,7 @@ async def test_get_run_returns_error_for_missing_id(run_service):  # 测试获�
     result = await run_service.get_run("non-existent-id")  # 查询不存在的 Run
 
     # 验证返回的是 AppError
-    from app.core.models.error import AppError  # 导入 AppError 模型
+    from app.core.models.error import AppError
     assert isinstance(result, AppError)  # 验证返回的是错误对象
     assert result.error_code == ErrorCode.RUN_NOT_FOUND  # 验证错误码正确
     assert "not found" in result.message.lower() or "不存在" in result.message  # 验证错误消息包含"not found"或"不存在"

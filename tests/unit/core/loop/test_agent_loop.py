@@ -10,18 +10,18 @@
 - LLM 调用失败场景
 """
 
-from __future__ import annotations  # # 启用未来注解
+from __future__ import annotations
 
-import asyncio  # # 导入异步模块，用于测试并行执行
-import json  # # 导入 JSON 处理模块
-import pytest  # # 导入 pytest 测试框架
-import time  # # 导入时间模块，用于测量并行执行时间
-from datetime import datetime, timezone  # # 导入日期时间类和 UTC 时区
-from typing import AsyncIterator, Optional  # # 导入异步迭代器和可选类型
+import asyncio
+import json
+import pytest
+import time
+from datetime import datetime, timezone
+from typing import AsyncIterator, Optional
 
-from app.core.models.agent import Agent, AgentExecutionProfile, AgentPromptSource  # # 导入 Agent 和执行配置模型
-from app.core.models.error import ErrorCode  # # 导入错误码枚举
-from app.core.models.event import (  # # 导入事件模型
+from app.core.models.agent import Agent, AgentExecutionProfile, AgentPromptSource
+from app.core.models.error import ErrorCode
+from app.core.models.event import (
     Event,
     RunStartedEvent,
     MessageDeltaEvent,
@@ -30,18 +30,18 @@ from app.core.models.event import (  # # 导入事件模型
     RunCompletedEvent,
     RunFailedEvent,
 )
-from app.core.models.tool import Tool, ToolResult, ToolRegistry  # # 导入工具相关模型
-from app.core.models.execution_context import ExecutionContext  # # 导入执行上下文模型
-from app.core.models.stored_message import StoredMessage  # # 导入存储消息模型，验证工具附带消息链路。
-from app.core.hooks import (  # # 导入 Hook 相关模型
+from app.core.models.tool import Tool, ToolResult, ToolRegistry
+from app.core.models.execution_context import ExecutionContext
+from app.core.models.stored_message import StoredMessage
+from app.core.hooks import (
     PersistLargeToolResultHook,
     ToolHook,
     ToolHookPipeline,
     ToolRequest,
     ToolResponse,
 )
-from app.core.loop.agent_loop import AgentLoop  # # 导入被测类
-from app.infra.store.redis_tool_result_store import RedisToolResultStore  # # 导入大工具结果存储，验证完整正文落 Redis。
+from app.core.loop.agent_loop import AgentLoop
+from app.infra.store.redis_tool_result_store import RedisToolResultStore
 
 # 类型导入
 from typing import TYPE_CHECKING

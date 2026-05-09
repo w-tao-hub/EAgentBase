@@ -1,14 +1,14 @@
 """事件模型定义。"""
 
-from __future__ import annotations  # 启用未来注解，避免前向引用问题
+from __future__ import annotations
 
-from abc import ABC, abstractmethod  # 导入抽象基类和抽象方法装饰器
-from typing import Optional  # 导入可选类型
+from abc import ABC, abstractmethod
+from typing import Optional
 
-from pydantic import BaseModel  # 导入 Pydantic v2 的基础模型
+from pydantic import BaseModel
 
-from app.core.models.error import ErrorCode  # 导入错误码枚举，确保事件也使用受控错误词汇
-from app.core.models.stored_message import StoredMessage  # 导入消息模型，承载内部附带消息。
+from app.core.models.error import ErrorCode
+from app.core.models.stored_message import StoredMessage
 
 
 class Event(ABC, BaseModel):
@@ -55,7 +55,7 @@ class RunStartedEvent(ExternalEvent):
     def to_payload(self) -> dict:
         """序列化为包含 type、run_id、session_id 的字典。"""
         return {
-            "type": self.event_name,  # type 字段与 event_name 保持一致
+            "type": self.event_name,
             "run_id": self.run_id,
             "session_id": self.session_id,
         }

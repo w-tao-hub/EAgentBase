@@ -1,15 +1,15 @@
 """RunPythonScriptTool 单元测试。"""
 
-from __future__ import annotations  # 启用未来注解
+from __future__ import annotations
 
-import json  # 导入 JSON 模块
-import sys  # 导入系统模块，获取当前 Python 解释器路径
-from pathlib import Path  # 导入 Path，用于构造临时工作区
+import json
+import sys
+from pathlib import Path
 
-import pytest  # 导入 pytest 测试框架
+import pytest
 
-from app.core.models.execution_context import ExecutionContext  # 导入执行上下文
-from app.core.models.tool import ToolResult  # 导入结果模型
+from app.core.models.execution_context import ExecutionContext
+from app.core.models.tool import ToolResult
 from app.infra.tools.run_python_script_tool import (
     RunPythonScriptTool,  # 导入被测工具
     DEFAULT_TIMEOUT_SECONDS,  # 导入默认超时常量
@@ -18,7 +18,7 @@ from app.infra.tools.run_python_script_tool import (
 
 def _build_ctx() -> ExecutionContext:
     """快速构造执行上下文辅助函数。"""
-    from app.core.models.agent import Agent  # 延迟导入避免循环
+    from app.core.models.agent import Agent
 
     agent = Agent(
         agent_id="a1",

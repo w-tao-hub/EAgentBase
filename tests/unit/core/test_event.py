@@ -5,9 +5,9 @@
 
 from datetime import datetime, timezone
 
-import pytest  # 导入 pytest 测试框架
+import pytest
 
-from app.core.models.event import (  # 导入被测事件类
+from app.core.models.event import (
     ToolUseCompletedEvent,
     ToolUseStartedEvent,
 )

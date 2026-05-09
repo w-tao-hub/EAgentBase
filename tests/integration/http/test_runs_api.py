@@ -3,53 +3,38 @@
 测试 GET /runs/{run_id} 接口。
 """
 
-from __future__ import annotations  # 启用未来注解
+from __future__ import annotations
 
-import pytest  # 导入 pytest 测试框架
-import pytest_asyncio  # 导入 pytest 异步支持
-from httpx import ASGITransport, AsyncClient  # 导入异步 HTTP 客户端
+import pytest
+import pytest_asyncio
+from httpx import ASGITransport, AsyncClient
 
-import fakeredis.aioredis  # 导入 fakeredis 异步实现
+import fakeredis.aioredis
 
-from app.bootstrap.container import Container  # 导入容器，便于 patch Redis 创建点
-from app.bootstrap.factory import bootstrap_app  # 导入公开启动入口，复用真实 bootstrap 路径
+from app.bootstrap.container import Container
+from app.bootstrap.factory import bootstrap_app
 
 
-@pytest_asyncio.fixture  # 定义异步夹具
+@pytest_asyncio.fixture
 async def async_client(monkeypatch):
-    """提供注入假依赖的异步 HTTP 测试客户端。
-
-    使用 fakeredis 替代真实 Redis 依赖。
-    """
-    # 创建 fakeredis 实例
+    """提供注入假依赖的异步 HTTP 测试客户端。"""
     redis = fakeredis.aioredis.FakeRedis(decode_responses=True)
 
-    # 通过应用工厂创建 FastAPI 实例，注入假依赖
-    monkeypatch.setattr(Container, "_create_redis", staticmethod(lambda settings: redis))  # 拦截主 Redis 创建，改为返回 fakeredis
-    monkeypatch.setattr(Container, "_create_pubsub_redis", staticmethod(lambda settings: redis))  # 拦截 pubsub Redis 创建，复用同一 fakeredis 替身
+    monkeypatch.setattr(Container, "_create_redis", staticmethod(lambda settings: redis))
+    monkeypatch.setattr(Container, "_create_pubsub_redis", staticmethod(lambda settings: redis))
     app = bootstrap_app()
 
-    # 构造异步测试客户端
-    transport = ASGITransport(app=app)  # 创建 ASGI 传输层
+    transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
-        yield client  # 提供客户端给测试函数
+        yield client
 
-    # 清理：关闭 fakeredis 连接
     await redis.aclose()
 
 
-@pytest.mark.asyncio  # 标记为异步测试
+@pytest.mark.asyncio
 async def test_get_missing_run_returns_http_200_with_request_failed(async_client):
-    """测试查询不存在的运行返回 200 和 request_failed 类型。
-
-    业务错误统一使用 HTTP 200 + request_failed body 表达，
-    不使用 HTTP 4xx/5xx。
-    """
-    # 查询一个不存在的运行
+    """测试查询不存在的运行返回 200 和 request_failed 类型。"""
     response = await async_client.get("/runs/missing")
 
-    # 验证返回状态码为 200（业务错误不使用 HTTP 错误码）
     assert response.status_code == 200
-
-    # 验证返回的错误类型为 request_failed
     assert response.json()["type"] == "request_failed"

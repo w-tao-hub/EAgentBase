@@ -1,11 +1,11 @@
 """RedisTaskStore 单元测试。"""
 
-from __future__ import annotations  # 启用未来注解
+from __future__ import annotations
 
-import pytest  # 导入 pytest 测试框架
+import pytest
 
-from app.core.models.task import TaskItem, TaskStatus  # 导入任务模型
-from app.infra.store.redis_task_store import RedisTaskStore  # 导入任务存储
+from app.core.models.task import TaskItem, TaskStatus
+from app.infra.store.redis_task_store import RedisTaskStore
 
 
 @pytest.fixture  # 定义测试夹具

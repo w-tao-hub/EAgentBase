@@ -1,19 +1,19 @@
 """PersistLargeToolResultHook 单元测试。"""
 
-from __future__ import annotations  # 启用未来注解，避免运行时前向引用问题。
+from __future__ import annotations
 
-import pytest  # 导入 pytest，编写异步测试。
+import pytest
 
-from app.core.hooks import (  # 导入被测 Hook 与相关常量、载体。
+from app.core.hooks import (
     MAX_TOOL_RESULT_CHARACTERS,
     PersistLargeToolResultHook,
     QUERY_TOOL_RESULT_NAME,
     TOOL_RESULT_PREVIEW_CHARACTERS,
     ToolResponse,
 )
-from app.core.models.agent import Agent  # 导入 Agent，构造执行上下文。
-from app.core.models.execution_context import ExecutionContext  # 导入执行上下文。
-from app.core.models.tool import ToolResult  # 导入工具结果模型。
+from app.core.models.agent import Agent
+from app.core.models.execution_context import ExecutionContext
+from app.core.models.tool import ToolResult
 
 
 class StubToolResultStore:

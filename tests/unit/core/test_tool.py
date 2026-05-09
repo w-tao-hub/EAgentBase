@@ -1,8 +1,8 @@
 """Tool、ToolResult、ToolRegistry 单元测试。"""
 
-import pytest  # 导入 pytest 测试框架
+import pytest
 
-from app.core.models.tool import Tool, ToolRegistry, ToolResult  # 导入被测对象
+from app.core.models.tool import Tool, ToolRegistry, ToolResult
 
 
 class FakeTool(Tool):

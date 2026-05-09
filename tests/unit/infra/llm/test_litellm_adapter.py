@@ -4,15 +4,15 @@
 新增测试：tool_calls 增量片段解析。
 """
 
-from __future__ import annotations  # 启用未来注解
+from __future__ import annotations
 
-import sys  # 导入 sys，用于替换延迟导入的 litellm 模块
-from types import SimpleNamespace  # 导入简单命名空间，便于构造假模块
+import sys
+from types import SimpleNamespace
 
-import pytest  # 导入 pytest 测试框架
+import pytest
 
-from app.core.models.llm_chunk import LLMChunk  # 导入 LLMChunk 模型
-from app.infra.llm.litellm_adapter import LiteLLMAdapter  # 导入被测类
+from app.core.models.llm_chunk import LLMChunk
+from app.infra.llm.litellm_adapter import LiteLLMAdapter
 
 
 class FakeLiteLLMResponse:
@@ -44,9 +44,9 @@ class FakeLiteLLMResponseWithToolCalls:
 
     def __init__(
         self,
-        content: str | None = None,  # 文本内容
-        tool_calls: list[FakeToolCall] | None = None,  # 工具调用列表
-        finish_reason: str | None = None,  # 完成原因
+        content: str | None = None,
+        tool_calls: list[FakeToolCall] | None = None,
+        finish_reason: str | None = None,
     ) -> None:
         """初始化模拟响应对象。"""
         self.choices = [self._Choice(content, tool_calls, finish_reason)]  # 构造 choices 列表
@@ -82,10 +82,10 @@ class FakeToolCall:
 
     def __init__(
         self,
-        index: int = 0,  # 工具调用索引
-        tc_id: str | None = None,  # 工具调用 ID
-        function_name: str | None = None,  # 函数名
-        arguments: str | None = None,  # 参数
+        index: int = 0,
+        tc_id: str | None = None,
+        function_name: str | None = None,
+        arguments: str | None = None,
     ) -> None:
         """初始化模拟 tool_call 对象。"""
         self.index = index  # 设置索引
@@ -101,8 +101,8 @@ class FakeToolCall:
 
         def __init__(
             self,
-            name: str | None = None,  # 函数名
-            arguments: str | None = None,  # 参数
+            name: str | None = None,
+            arguments: str | None = None,
         ) -> None:
             """初始化模拟 function 对象。"""
             self.name = name  # 设置函数名

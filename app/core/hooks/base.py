@@ -1,13 +1,13 @@
 """Hook 基类定义。"""
 
-from __future__ import annotations  # 启用未来注解，避免运行时前向引用问题
+from __future__ import annotations
 
-from typing import TYPE_CHECKING  # 导入类型提示工具
+from typing import TYPE_CHECKING
 
-from app.core.hooks.types import ModelRequest, ModelResponse, ToolRequest, ToolResponse  # 导入 Hook 载体
+from app.core.hooks.types import ModelRequest, ModelResponse, ToolRequest, ToolResponse
 
-if TYPE_CHECKING:  # 仅在类型检查阶段导入，避免循环依赖
-    from app.core.models.execution_context import ExecutionContext  # 导入执行上下文类型
+if TYPE_CHECKING:
+    from app.core.models.execution_context import ExecutionContext
 
 
 class ModelHook:
@@ -22,7 +22,7 @@ class ModelHook:
         Args:
             fail_open: 为 True 时，Hook 抛错只记录日志并跳过
         """
-        self._fail_open = fail_open  # 保存失败策略，供 Pipeline 判断是否吞错
+        self._fail_open = fail_open
 
     @property
     def fail_open(self) -> bool:
@@ -56,7 +56,7 @@ class ToolHook:
         Args:
             fail_open: 为 True 时，Hook 抛错只记录日志并跳过
         """
-        self._fail_open = fail_open  # 保存失败策略，供 Pipeline 判断是否吞错
+        self._fail_open = fail_open
 
     @property
     def fail_open(self) -> bool:

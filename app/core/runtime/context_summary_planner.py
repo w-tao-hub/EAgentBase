@@ -31,7 +31,6 @@ from app.core.runtime.context_history_view import ContextHistoryView
 if TYPE_CHECKING:
     from app.infra.llm.litellm_adapter import LiteLLMAdapter
 
-# 获取模块级日志器。
 logger = logging.getLogger(__name__)
 
 
@@ -43,10 +42,10 @@ class SummaryCompressionResult:
     此时 recent_history_records 包含所有裁剪后保留的历史记录。
     """
 
-    summary_message: StoredMessage | None  # 生成的压缩摘要消息，None 表示仅裁剪未摘要。
-    recent_history_records: list[NormalizedMessageRecord]  # 裁剪后保留的历史记录（或最近两轮）。
-    active_start_message: StoredMessage | None  # 活动窗口的起始原始消息。
-    active_start_offset: int | None  # 活动起点在完整历史中的绝对索引。
+    summary_message: StoredMessage | None
+    recent_history_records: list[NormalizedMessageRecord]
+    active_start_message: StoredMessage | None
+    active_start_offset: int | None
 
 
 class ContextSummaryPlanner:
@@ -234,9 +233,7 @@ class ContextSummaryPlanner:
             active_start_offset=keep_history_start_index,
         )
 
-    # ------------------------------------------------------------------
-    # 私有辅助方法（均从 TokenBudgetCompressionPolicy 迁移而来）
-    # ------------------------------------------------------------------
+    # 私有辅助方法
 
     @staticmethod
     def compose_llm_messages_from_records(

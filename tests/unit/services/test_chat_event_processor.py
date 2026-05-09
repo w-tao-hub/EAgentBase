@@ -1,13 +1,13 @@
 """ChatEventProcessor 单元测试。"""
 
-from __future__ import annotations  # 启用未来注解
+from __future__ import annotations
 
-import asyncio  # 导入 asyncio，用于验证后台写缓冲不会阻塞 process_event 返回
-from datetime import datetime, timezone  # 导入时间工具，构造测试会话消息
+import asyncio
+from datetime import datetime, timezone
 
-import pytest  # 导入 pytest，编写异步单元测试
+import pytest
 
-from app.core.models.event import (  # 导入待测事件类型
+from app.core.models.event import (
     AssistantWithToolsEvent,
     ExternalEvent,
     RunCompletedEvent,
@@ -15,10 +15,10 @@ from app.core.models.event import (  # 导入待测事件类型
     ToolUseCompletedEvent,
     ToolUseStartedEvent,
 )
-from app.core.models.error import ErrorCode  # 导入错误码枚举，用于构造失败事件
-from app.core.models.stored_message import StoredMessage  # 导入消息模型，用于准备历史数据
-from app.services.chat_event_processor import ChatEventProcessor  # 导入待测事件处理器
-from app.infra.store.redis_session_store import RedisSessionStore  # 导入会话存储实现
+from app.core.models.error import ErrorCode
+from app.core.models.stored_message import StoredMessage
+from app.services.chat_event_processor import ChatEventProcessor
+from app.infra.store.redis_session_store import RedisSessionStore
 
 
 class UnknownExternalEvent(ExternalEvent):

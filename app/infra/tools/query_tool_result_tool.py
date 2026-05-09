@@ -3,11 +3,11 @@
 提供对当前会话下已持久化大工具结果的按 key 查询能力。
 """
 
-from __future__ import annotations  # 启用未来注解，避免运行时前向引用问题。
+from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Dict  # 导入类型提示，描述工具入参与上下文。
+from typing import TYPE_CHECKING, Any, Dict
 
-from app.core.models.tool import Tool, ToolResult  # 导入工具抽象与标准结果模型。
+from app.core.models.tool import Tool, ToolResult
 
 if TYPE_CHECKING:  # 仅在类型检查时导入，避免运行时不必要耦合。
     from app.core.models.execution_context import ExecutionContext

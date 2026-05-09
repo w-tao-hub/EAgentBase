@@ -3,10 +3,10 @@
 定义 ExecutionContext 数据类，封装工具执行时需要的所有上下文信息。
 """
 
-from __future__ import annotations  # 启用未来注解，避免前向引用问题
+from __future__ import annotations
 
-import asyncio  # 导入 asyncio 模块，用于异步事件
-from dataclasses import dataclass, field  # 导入数据类装饰器和字段函数
+import asyncio
+from dataclasses import dataclass, field
 
 
 @dataclass
@@ -29,34 +29,14 @@ class ExecutionContext:
         tool_name: 当前工具的名称，在 for_tool_call() 派生时设置
     """
 
-    # 运行唯一标识符，用于追踪单次执行
     run_id: str
-
-    # 会话唯一标识符，用于关联对话上下文
     session_id: str
-
-    # 请求元数据字典，可包含权限信息、业务上下文等
-    # 为 None 时表示请求未提供元数据
     metadata: dict | None
-
-    # Agent 配置对象，包含模型、系统提示等信息
-    agent: "Agent"  # type: ignore  # 使用字符串前向引用避免循环导入
-
-    # 异步取消事件，用于外部中断当前运行
-    # 默认构造一个未触发的 Event，各层可通过 is_set() 检查是否被取消
+    agent: "Agent"  # type: ignore
     cancel_event: asyncio.Event = field(default_factory=asyncio.Event)
-
-    # 运行类型，用于区分主运行（master）和子代理运行（child），默认为 master
     run_type: str = "master"
-
-    # 子代理的会话内稳定标识符。仅当 run_type="child" 时设置，
-    # 主代理上下文保持 None，用于 plan/task 隔离命名空间推导。
     child_id: str | None = None
-
-    # 当前工具调用的唯一标识符，None 表示不在工具调用上下文中
     tool_call_id: str | None = None
-
-    # 当前工具的名称，None 表示不在工具调用上下文中
     tool_name: str | None = None
 
     def for_tool_call(self, *, tool_call_id: str, tool_name: str) -> "ExecutionContext":

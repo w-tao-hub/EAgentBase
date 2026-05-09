@@ -1,12 +1,12 @@
 """RedisToolResultStore 单元测试。"""
 
-from __future__ import annotations  # 启用未来注解，避免运行时前向引用问题。
+from __future__ import annotations
 
-from datetime import datetime, timezone  # 导入时间工具，校验持久化记录时间类型。
+from datetime import datetime, timezone
 
-import pytest  # 导入 pytest，编写异步测试。
+import pytest
 
-from app.infra.store.redis_tool_result_store import RedisToolResultStore  # 导入被测 store。
+from app.infra.store.redis_tool_result_store import RedisToolResultStore
 
 
 @pytest.mark.asyncio

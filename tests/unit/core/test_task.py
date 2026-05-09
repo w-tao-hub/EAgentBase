@@ -1,11 +1,11 @@
 """任务模型单元测试。"""
 
-from __future__ import annotations  # 启用未来注解
+from __future__ import annotations
 
-import pytest  # 导入 pytest 测试框架
-from pydantic import ValidationError  # 导入 Pydantic 验证错误
+import pytest
+from pydantic import ValidationError
 
-from app.core.models.task import TaskItem, TaskStatus  # 导入任务模型
+from app.core.models.task import TaskItem, TaskStatus
 
 
 def test_task_status_values():  # 测试任务状态枚举值

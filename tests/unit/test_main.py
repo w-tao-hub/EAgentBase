@@ -33,7 +33,7 @@ class StubContainer:
 
 def test_bootstrap_app_runs_bootstrap_stages_in_order(monkeypatch) -> None:
     """验证公开启动入口只负责编排 bootstrap 阶段。"""
-    calls: list[tuple[str, object]] = []  # 记录调用顺序，确保启动边界清晰稳定
+    calls: list[tuple[str, object]] = []
     settings = Settings(redis_url="redis://localhost:6379")  # 使用最小可用配置构造 Settings
     container = SimpleNamespace()  # 使用最小容器替身，避免依赖真实装配
     app = SimpleNamespace()  # 使用最小应用替身，聚焦编排顺序而非 FastAPI 细节

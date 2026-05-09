@@ -1,13 +1,13 @@
 """QueryToolResultTool 单元测试。"""
 
-from __future__ import annotations  # 启用未来注解，避免运行时前向引用问题。
+from __future__ import annotations
 
-import pytest  # 导入 pytest，编写异步测试。
+import pytest
 
-from app.core.models.agent import Agent  # 导入 Agent，构造执行上下文。
-from app.core.models.execution_context import ExecutionContext  # 导入执行上下文。
-from app.infra.store.redis_tool_result_store import RedisToolResultStore  # 导入真实 store，复用其 key 规则。
-from app.infra.tools.query_tool_result_tool import QueryToolResultTool  # 导入被测工具。
+from app.core.models.agent import Agent
+from app.core.models.execution_context import ExecutionContext
+from app.infra.store.redis_tool_result_store import RedisToolResultStore
+from app.infra.tools.query_tool_result_tool import QueryToolResultTool
 
 
 def _context(session_id: str = "session-1") -> ExecutionContext:

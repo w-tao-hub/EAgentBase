@@ -3,12 +3,12 @@
 提供 PlanGetTool，负责读取当前会话中的单个计划任务详情。
 """
 
-from __future__ import annotations  # 启用未来注解
+from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Dict  # 导入类型提示
+from typing import TYPE_CHECKING, Any, Dict
 
-from app.core.models.tool import Tool, ToolResult  # 导入工具基类与结果模型
-from app.services.task_service import TaskService  # 导入任务业务服务
+from app.core.models.tool import Tool, ToolResult
+from app.services.task_service import TaskService
 
 if TYPE_CHECKING:  # 仅在类型检查时导入，避免循环依赖
     from app.core.models.execution_context import ExecutionContext

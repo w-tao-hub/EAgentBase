@@ -1,10 +1,10 @@
 """Session 领域模型定义。"""
 
-from __future__ import annotations  # 启用未来注解，避免前向引用问题
+from __future__ import annotations
 
-from datetime import datetime  # 导入日期时间类
+from datetime import datetime
 
-from pydantic import BaseModel, Field  # 导入 Pydantic v2 的基础模型和字段工具
+from pydantic import BaseModel, Field
 
 
 class Session(BaseModel):

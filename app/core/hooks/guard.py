@@ -1,11 +1,11 @@
 """流式文本守卫定义。"""
 
-from __future__ import annotations  # 启用未来注解，避免运行时前向引用问题
+from __future__ import annotations
 
-from typing import TYPE_CHECKING  # 导入类型提示工具
+from typing import TYPE_CHECKING
 
-if TYPE_CHECKING:  # 仅在类型检查阶段导入，避免循环依赖
-    from app.core.models.execution_context import ExecutionContext  # 导入执行上下文类型
+if TYPE_CHECKING:
+    from app.core.models.execution_context import ExecutionContext
 
 
 class StreamTextGuard:

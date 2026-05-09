@@ -1,14 +1,14 @@
 """MCP 适配器单元测试。"""
 
-from __future__ import annotations  # 启用未来注解，避免前向引用问题。
+from __future__ import annotations
 
-import json  # 导入 JSON 模块，用于断言结构化内容序列化结果。
+import json
 
-import pytest  # 导入 pytest 测试框架。
+import pytest
 
-from app.core.models.agent import Agent  # 导入 Agent 模型，用于构造执行上下文。
-from app.core.models.execution_context import ExecutionContext  # 导入执行上下文模型。
-from app.infra.tools.mcp_adapter import MCPToolAdapter  # 导入被测的 MCP 工具适配器。
+from app.core.models.agent import Agent
+from app.core.models.execution_context import ExecutionContext
+from app.infra.tools.mcp_adapter import MCPToolAdapter
 
 
 class FakeTextContent:  # 定义文本内容块替身。
@@ -24,9 +24,9 @@ class FakeCallToolResult:  # 定义工具调用结果替身。
 
     def __init__(  # 定义初始化方法。
         self,  # 声明实例自身参数。
-        content: list[object] | None = None,  # 声明内容块列表参数。
-        structured_content: dict | None = None,  # 声明结构化结果参数。
-        is_error: bool = False,  # 声明错误标记参数。
+        content: list[object] | None = None,
+        structured_content: dict | None = None,
+        is_error: bool = False,
     ) -> None:
         """保存工具调用结果字段。"""
         self.content = content or []  # 保存内容块列表，默认空列表。

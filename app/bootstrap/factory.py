@@ -1,30 +1,23 @@
 """应用启动 bootstrap 工厂。
 
-负责把配置加载、启动期全局初始化、容器构建三段流程编排起来，
-并在最后调用纯装配器创建 FastAPI 应用实例。
+编排配置加载、初始化、容器构建，最后调用纯装配器创建 FastAPI 应用实例。
 """
 
-from __future__ import annotations  # 启用未来注解，避免前向引用字符串噪音
+from __future__ import annotations
 
-from pathlib import Path  # 导入 Path，用于统一解析项目根目录与相对路径
+from pathlib import Path
 
-from dotenv import load_dotenv  # 导入 dotenv，用于把本地 `.env` 注入进程环境
-from fastapi import FastAPI  # 导入 FastAPI 类型，作为公开启动入口返回值
+from dotenv import load_dotenv
+from fastapi import FastAPI
 
-from app.bootstrap.container import Container  # 导入容器类型，作为 bootstrap 产物
-from app.config import Settings  # 导入配置对象，集中承接环境变量
-from app.infra.logging import setup_logging  # 导入日志初始化函数，统一放在 bootstrap 阶段执行
-from app.main import create_app  # 导入纯装配器，bootstrap 完成后只负责组装 FastAPI
+from app.bootstrap.container import Container
+from app.config import Settings
+from app.infra.logging import setup_logging
+from app.main import create_app
 
 
 def get_project_root() -> Path:
-    """返回仓库根目录。
-
-    Returns:
-        当前项目仓库根目录绝对路径
-    """
-    # `factory.py` 位于 `app/bootstrap/` 下，
-    # 向上两级正好回到仓库根目录。
+    """返回仓库根目录。"""
     return Path(__file__).resolve().parents[2]
 
 
@@ -123,15 +116,7 @@ def bootstrap_app() -> FastAPI:
     Returns:
         已完成 bootstrap 与装配的 FastAPI 应用实例
     """
-    # 第一步：加载配置来源。
     settings = load_settings()
-
-    # 第二步：执行启动期全局初始化。
     initialize_runtime(settings)
-
-    # 第三步：构建依赖容器。
     container = build_container(settings)
-
-    # 第四步：把已准备好的依赖交给纯装配器，
-    # 由后者负责注册 FastAPI 壳层组件。
     return create_app(settings=settings, container=container)

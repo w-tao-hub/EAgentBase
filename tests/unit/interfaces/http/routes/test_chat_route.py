@@ -1,14 +1,14 @@
 """聊天路由单元测试。"""
 
-from __future__ import annotations  # 启用未来注解，避免前向引用字符串噪音
+from __future__ import annotations
 
-import asyncio  # 导入 asyncio，用于模拟断连时的任务取消竞态
+import asyncio
 
-import pytest  # 导入 pytest 测试框架
+import pytest
 
-from app.core.models.event import RunStartedEvent  # 导入最小事件模型，构造可被 SSE 编码的首个事件
-from app.interfaces.http.routes.chat import chat as chat_route  # 导入被测聊天路由函数，直接验证其清理语义
-from app.interfaces.http.schemas.chat import ChatRequest  # 导入聊天请求模型，复用真实参数结构
+from app.core.models.event import RunStartedEvent
+from app.interfaces.http.routes.chat import chat as chat_route
+from app.interfaces.http.schemas.chat import ChatRequest
 
 
 class StubRequest:

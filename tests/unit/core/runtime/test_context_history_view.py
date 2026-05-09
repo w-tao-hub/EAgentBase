@@ -1,14 +1,14 @@
 """历史视图重建测试。"""
 
-from __future__ import annotations  # 启用未来注解，避免前向引用问题
+from __future__ import annotations
 
-from datetime import datetime, timezone  # 导入日期时间类和 UTC 时区
+from datetime import datetime, timezone
 
-import pytest  # 导入 pytest 测试框架，用于异常断言
+import pytest
 
-from app.core.models.stored_message import StoredMessage  # 导入存储消息模型
-from app.core.runtime.context_history_view import ContextHistoryViewBuilder  # 导入历史视图构建器
-from app.infra.store.redis_session_store import ContextSummaryState  # 导入摘要边界状态
+from app.core.models.stored_message import StoredMessage
+from app.core.runtime.context_history_view import ContextHistoryViewBuilder
+from app.infra.store.redis_session_store import ContextSummaryState
 
 
 def _message(role: str, content: str) -> StoredMessage:

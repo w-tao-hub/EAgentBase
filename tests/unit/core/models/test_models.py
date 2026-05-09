@@ -1,15 +1,15 @@
 """领域模型、错误码与事件模型的单元测试。"""
 
-from __future__ import annotations  # 启用未来注解，避免前向引用问题
+from __future__ import annotations
 
-from datetime import datetime, timezone  # 导入日期时间类和时区类
+from datetime import datetime, timezone
 
-import pytest  # 导入 pytest，用于断言非法状态组合会触发校验异常
-from pydantic import ValidationError  # 导入 Pydantic 校验异常类型
+import pytest
+from pydantic import ValidationError
 
-from app.core.models.agent import Agent  # 导入 Agent 领域模型
-from app.core.models.error import AppError, ErrorCode  # 导入错误模型和错误码枚举
-from app.core.models.event import (  # 导入各类事件模型
+from app.core.models.agent import Agent
+from app.core.models.error import AppError, ErrorCode
+from app.core.models.event import (
     AssistantWithToolsEvent,
     Event,
     ExternalEvent,
@@ -22,9 +22,9 @@ from app.core.models.event import (  # 导入各类事件模型
     ToolUseCompletedEvent,
     ToolUseStartedEvent,
 )
-from app.core.models.run import ExecutionMode, Run, RunStatus, RunType  # 导入运行记录模型和状态枚举
-from app.core.models.session import Session  # 导入会话领域模型
-from app.core.models.stored_message import StoredMessage, StoredMessageMeta  # 导入直接存储消息模型
+from app.core.models.run import ExecutionMode, Run, RunStatus, RunType
+from app.core.models.session import Session
+from app.core.models.stored_message import StoredMessage, StoredMessageMeta
 
 
 # ---------------------------------------------------------------------------

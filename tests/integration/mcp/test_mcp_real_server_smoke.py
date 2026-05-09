@@ -11,16 +11,16 @@
 - 因涉及真实网络和子进程启动，标记为 smoke 测试，CI 中可按需运行。
 """
 
-from __future__ import annotations  # 启用未来注解，避免前向引用问题。
+from __future__ import annotations
 
-import asyncio  # 导入 asyncio，用于异步休眠和超时控制。
-import subprocess  # 导入 subprocess，用于通过 ps 命令查找进程。
-import threading  # 导入 threading，用于枚举和断言线程残留。
-from pathlib import Path  # 导入 Path，用于定位项目根目录的 mcp_servers.json。
+import asyncio
+import subprocess
+import threading
+from pathlib import Path
 
-import pytest  # 导入 pytest 测试框架。
+import pytest
 
-from app.infra.tools.mcp_client_manager import MCPClientManager, MCPServerConfig  # 导入被测 MCP 客户端管理器。
+from app.infra.tools.mcp_client_manager import MCPClientManager, MCPServerConfig
 
 
 def _project_root() -> Path:

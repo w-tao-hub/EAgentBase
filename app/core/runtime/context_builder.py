@@ -3,39 +3,35 @@
 负责将 Agent 配置、历史消息和当前用户消息组装成完整的 LLM 请求上下文。
 """
 
-from __future__ import annotations  # 启用未来注解，避免前向引用问题
+from __future__ import annotations
 
-from dataclasses import dataclass  # 导入数据类，用于返回带 dirty 标记的构建结果。
-from datetime import datetime, timezone  # 导入日期时间类和 UTC 时区
-import inspect  # 导入 inspect，用于兼容旧的自定义 trim policy 签名。
-import logging  # 导入标准库日志模块，用于输出归一化后的最终消息列表。
-import re  # 导入正则模块，用于识别 skill 与上下文摘要消息。
-import time  # 导入高精度计时模块，用于统计上下文构建总耗时。
-from typing import TYPE_CHECKING, Protocol  # 导入类型检查标记与协议类型。
+from dataclasses import dataclass
+from datetime import datetime, timezone
+import inspect
+import logging
+import re
+import time
+from typing import TYPE_CHECKING, Protocol
 
-from app.core.models.agent import Agent  # 导入 Agent 领域模型
-from app.core.models.stored_message import StoredMessage  # 导入存储消息模型
-from app.core.runtime.context_history_view import ContextHistoryViewBuilder  # 导入历史视图构建器，用于重建活动窗口。
+from app.core.models.agent import Agent
+from app.core.models.stored_message import StoredMessage
+from app.core.runtime.context_history_view import ContextHistoryViewBuilder
 from app.core.runtime.context_summary_persistence import (
     SummaryPersistenceCoordinator,
     SummaryPersistencePlan,
 )
 
-if TYPE_CHECKING:  # 仅在类型检查阶段导入，避免运行时循环依赖。
-    from app.infra.llm.litellm_adapter import LiteLLMAdapter  # LiteLLM 适配器类型。
-    from app.infra.store.redis_session_store import ContextSummaryState, RedisSessionStore  # Redis 会话存储相关类型。
+if TYPE_CHECKING:
+    from app.infra.llm.litellm_adapter import LiteLLMAdapter
+    from app.infra.store.redis_session_store import ContextSummaryState, RedisSessionStore
 
-# 获取模块级日志器。
-# 直接使用标准库 logging，保持 runtime 层不依赖 infra 日志实现。
 logger = logging.getLogger(__name__)
 
-# skill 注入消息的稳定标签格式。
 SKILL_MESSAGE_PATTERN = re.compile(
     r"^<skill_name>.*?</skill_name><skill_message>.*?</skill_message>$",
     re.DOTALL,
 )
 
-# 历史摘要消息的稳定标签格式。
 CONTEXT_SUMMARY_PATTERN = re.compile(
     r"^<context_summary>.*?</context_summary>$",
     re.DOTALL,
@@ -46,37 +42,37 @@ CONTEXT_SUMMARY_PATTERN = re.compile(
 class ContextBuildResult:
     """封装上下文构建结果。"""
 
-    llm_messages: list[dict]  # 保存最终可直接传给模型的消息列表。
-    history_dirty: bool  # 标记此次扫描是否发现了工具消息配对错乱。
+    llm_messages: list[dict]
+    history_dirty: bool
 
 
 @dataclass(slots=True)
 class TaggedMessageInput:
     """带来源信息的待归一化消息。"""
 
-    message: StoredMessage | dict  # 原始领域消息或已是 dict 结构的消息。
-    source: str  # 消息来源类型，如 system / history / current_user。
-    history_index: int | None = None  # 若来源于历史消息，则记录其在完整历史中的绝对索引。
-    original_message: StoredMessage | None = None  # 保留原始消息对象，便于压缩阶段读取额外语义。
+    message: StoredMessage | dict
+    source: str
+    history_index: int | None = None
+    original_message: StoredMessage | None = None
 
 
 @dataclass(slots=True)
 class NormalizedMessageRecord:
     """单条归一化消息及其来源映射。"""
 
-    llm_message: dict  # 已 repair-meta 处理过、可直接发给模型的消息结构。
-    source: str  # 该消息来自哪个逻辑来源。
-    history_index: int | None = None  # 对应原始历史索引，非历史消息时为 None。
-    original_message: StoredMessage | None = None  # 原始消息对象，仅历史消息和合成助手需要时保留。
+    llm_message: dict
+    source: str
+    history_index: int | None = None
+    original_message: StoredMessage | None = None
 
 
 @dataclass(slots=True)
 class PreparedContextSnapshot:
     """供压缩策略复用的一次性归一化快照。"""
 
-    llm_messages: list[dict]  # 已归一化、可直接送模型或做 token 统计的消息列表。
-    history_dirty: bool  # 本次归一化是否发现工具配对错乱。
-    records: list[NormalizedMessageRecord]  # 保留每条归一化消息与原始历史的映射。
+    llm_messages: list[dict]
+    history_dirty: bool
+    records: list[NormalizedMessageRecord]
 
 
 @dataclass(frozen=True, slots=True)
@@ -87,7 +83,7 @@ class SummaryPersistenceTarget:
     """
 
     kind: str  # main 或 child
-    session_id: str  # 所属 session_id
+    session_id: str
     child_id: str | None = None  # child 目标时必填
 
     @classmethod
@@ -105,10 +101,10 @@ class SummaryPersistenceTarget:
 class PrunedHistoryResult:
     """旧历史清理结果。"""
 
-    records: list[NormalizedMessageRecord]  # 清理后的归一化记录列表。
-    removed_query_tool_call_count: int = 0  # 被删除的旧 query_tool_result 请求条数。
-    removed_query_tool_result_count: int = 0  # 被删除的旧 query_tool_result 工具结果条数。
-    removed_skill_message_count: int = 0  # 被删除的旧 skill 注入消息条数。
+    records: list[NormalizedMessageRecord]
+    removed_query_tool_call_count: int = 0
+    removed_query_tool_result_count: int = 0
+    removed_skill_message_count: int = 0
 
 
 class ContextCompressionError(RuntimeError):
@@ -153,11 +149,11 @@ class NoTrimPolicy:
         extra_system_messages: list[str] | None = None,
     ) -> list[StoredMessage]:
         """按默认顺序返回完整上下文消息列表。"""
-        del agent, history_indices, session_id  # 默认策略不消费 Agent、绝对索引与 session_id，仅保留统一接口形状。
-        del summary_target  # 默认不裁剪策略不消费摘要目标，仅保持统一接口形状。
-        messages = self.build_system_messages(system_message, extra_system_messages)  # 先构造稳定的 system 前缀。
-        messages.extend(history)  # 再按原始顺序拼接完整历史消息。
-        if current_user_message is not None:  # 当前用户消息存在时，继续保持放在尾部。
+        del agent, history_indices, session_id
+        del summary_target
+        messages = self.build_system_messages(system_message, extra_system_messages)
+        messages.extend(history)
+        if current_user_message is not None:
             messages.append(current_user_message)
         return messages
 
@@ -167,8 +163,8 @@ class NoTrimPolicy:
         extra_system_messages: list[str] | None,
     ) -> list[StoredMessage]:
         """把主 system 与附加 system 组装成完整前缀。"""
-        messages: list[StoredMessage] = [system_message]  # 主 system prompt 永远保持在首位。
-        if not extra_system_messages:  # 没有附加提示时直接返回主 system。
+        messages: list[StoredMessage] = [system_message]
+        if not extra_system_messages:
             return messages
 
         for content in extra_system_messages:  # 逐条追加运行时附加的 system 提示。
@@ -176,9 +172,9 @@ class NoTrimPolicy:
                 continue
             messages.append(
                 StoredMessage.create(
-                    role="system",  # 附加提示继续以 system 角色参与推理。
-                    content=content,  # 内容保持调用方原文。
-                    timestamp=datetime.now(timezone.utc),  # 生成新的 UTC 时间戳，满足领域模型必填约束。
+                    role="system",
+                    content=content,
+                    timestamp=datetime.now(timezone.utc),
                 )
             )
         return messages
@@ -194,12 +190,11 @@ class TokenBudgetCompressionPolicy:
         token_threshold: int,
     ) -> None:
         """初始化压缩策略。"""
-        self._session_store = session_store  # 保存会话存储，供摘要边界读写使用。
-        self._summary_persistence = SummaryPersistenceCoordinator(session_store)  # 保存摘要持久化协作者，按目标隔离写入路径。
-        self._llm_adapter = llm_adapter  # 保存 LiteLLM 适配器，供 token 统计和摘要生成复用。
-        self._token_threshold = token_threshold  # 保存触发压缩的输入 token 阀值。
+        self._session_store = session_store
+        self._summary_persistence = SummaryPersistenceCoordinator(session_store)
+        self._llm_adapter = llm_adapter
+        self._token_threshold = token_threshold
 
-        # 延迟导入避免与 context_summary_planner 产生循环依赖。
         from app.core.runtime.context_summary_planner import ContextSummaryPlanner
 
         self._summary_planner = ContextSummaryPlanner(
@@ -480,16 +475,16 @@ class ContextBuilder:
     @staticmethod
     def message_to_llm_dict(message: StoredMessage) -> dict:
         """把单条 StoredMessage 转成 LLM 兼容结构。"""
-        msg_dict: dict = {"role": message.role}  # role 字段始终必传。
-        if message.content is not None:  # content 存在时才输出。
+        msg_dict: dict = {"role": message.role}
+        if message.content is not None:
             msg_dict["content"] = message.content
-        if message.tool_calls is not None:  # tool_calls 仅 assistant 工具请求会用到。
+        if message.tool_calls is not None:
             msg_dict["tool_calls"] = message.tool_calls
-        if message.reasoning_content is not None:  # reasoning_content 仅 DeepSeek thinking assistant 消息会用到。
+        if message.reasoning_content is not None:
             msg_dict["reasoning_content"] = message.reasoning_content
-        if message.tool_call_id is not None:  # tool_call_id 仅 tool 消息会用到。
+        if message.tool_call_id is not None:
             msg_dict["tool_call_id"] = message.tool_call_id
-        if message.name is not None:  # name 仅具名 tool 消息会用到。
+        if message.name is not None:
             msg_dict["name"] = message.name
         return msg_dict
 
@@ -520,7 +515,7 @@ class ContextBuilder:
         current_user_message: StoredMessage | None,
     ) -> PreparedContextSnapshot:
         """一次性归一化完整上下文，并保留来源与索引映射。"""
-        tagged_messages: list[TaggedMessageInput] = []  # 初始化带来源信息的上下文消息列表。
+        tagged_messages: list[TaggedMessageInput] = []
         for index, prepared_system_message in enumerate(
             NoTrimPolicy.build_system_messages(system_message, extra_system_messages)
         ):
@@ -570,10 +565,10 @@ class ContextBuilder:
         if not tagged_messages:  # 空列表直接返回，避免后续不必要处理。
             return PreparedContextSnapshot(llm_messages=[], history_dirty=False, records=[])
 
-        llm_messages: list[dict] = []  # 保存最终发给模型的消息列表。
-        records: list[NormalizedMessageRecord] = []  # 保存每条归一化消息与原始来源的映射。
+        llm_messages: list[dict] = []
+        records: list[NormalizedMessageRecord] = []
         history_dirty = False  # 记录本次扫描是否发现了需要修复的历史错乱。
-        pending_assistant: dict | None = None  # 保存尚未完成配对的 assistant tool 批次。
+        pending_assistant: dict | None = None
 
         def flush_pending_assistant() -> None:
             """把上一批 assistant tool 请求按已匹配结果结算到输出列表。"""
@@ -723,7 +718,7 @@ class ContextBuilder:
     def _build_system_message(agent: Agent) -> StoredMessage:
         """构造 system 消息。"""
         return StoredMessage.create(
-            role="system",  # system 角色固定为 system。
-            content=agent.system_prompt,  # 内容来自 Agent 的系统提示词。
-            timestamp=datetime.now(timezone.utc),  # 使用当前 UTC 时间作为时间戳。
+            role="system",
+            content=agent.system_prompt,
+            timestamp=datetime.now(timezone.utc),
         )

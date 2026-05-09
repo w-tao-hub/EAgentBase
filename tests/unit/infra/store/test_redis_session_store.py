@@ -1,14 +1,14 @@
 """RedisSessionStore 的单元测试。"""
 
-from __future__ import annotations  # 启用未来注解
+from __future__ import annotations
 
-import asyncio  # 导入异步工具，用于验证无依赖读取会并行启动。
-from datetime import datetime, timezone  # 导入日期时间类和 UTC 时区
-import pytest  # 导入 pytest 测试框架
+import asyncio
+from datetime import datetime, timezone
+import pytest
 
-from app.core.models.session import Session  # 导入 Session 模型
-from app.core.models.stored_message import StoredMessage  # 导入 StoredMessage 模型
-from app.infra.store.redis_session_store import ContextSummaryState, RedisSessionStore  # 导入被测类与摘要边界类型
+from app.core.models.session import Session
+from app.core.models.stored_message import StoredMessage
+from app.infra.store.redis_session_store import ContextSummaryState, RedisSessionStore
 
 
 @pytest.mark.asyncio  # 标记为异步测试

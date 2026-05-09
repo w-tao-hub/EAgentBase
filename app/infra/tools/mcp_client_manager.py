@@ -1,21 +1,21 @@
 """MCP 客户端管理器。"""
 
-from __future__ import annotations  # 启用未来注解，避免前向引用问题。
+from __future__ import annotations
 
-import asyncio  # 导入 asyncio，用于后台事件循环、超时控制与跨线程调度。
-import contextlib  # 导入上下文工具，用于组合关闭 http client 与 transport。
-import importlib  # 导入 importlib，用于按需加载官方 MCP SDK 与 httpx。
-import json  # 导入 JSON 模块，用于解析配置文件。
-from concurrent.futures import Future  # 导入 Future 类型，用于跨线程等待协程结果。
-from dataclasses import dataclass  # 导入数据类装饰器，用于定义配置与连接载体。
-from datetime import timedelta  # 导入 timedelta，用于构造 session 级读超时。
-from pathlib import Path  # 导入 Path，用于处理配置文件路径。
-from threading import Event, Thread  # 导入线程与事件，用于维护后台事件循环。
-from typing import Any  # 导入通用类型提示。
+import asyncio
+import contextlib
+import importlib
+import json
+from concurrent.futures import Future
+from dataclasses import dataclass
+from datetime import timedelta
+from pathlib import Path
+from threading import Event, Thread
+from typing import Any
 
-from app.config import Settings  # 导入配置模型，用于读取配置文件路径。
-from app.core.models.tool import Tool  # 导入工具抽象，用于返回已发现的工具列表。
-from app.infra.tools.mcp_adapter import MCPToolAdapter  # 导入 MCP 工具适配器，用于构造本地工具实例。
+from app.config import Settings
+from app.core.models.tool import Tool
+from app.infra.tools.mcp_adapter import MCPToolAdapter
 
 _SUPPORTED_TRANSPORTS = {"stdio", "streamable-http"}  # 声明当前支持的 transport 集合，避免散落硬编码。
 _COMMON_CONFIG_FIELDS = {"server_id", "name", "description", "enabled", "transport", "timeout_seconds"}  # 声明所有服务都可使用的公共字段。
@@ -27,12 +27,12 @@ _STREAMABLE_HTTP_CONFIG_FIELDS = {"url", "headers", "verify_ssl", "follow_redire
 class MCPServerConfig:
     """单个 MCP 服务配置。"""
 
-    server_id: str  # 服务唯一标识。
-    transport: str  # 传输类型，支持 stdio 与 streamable-http。
-    name: str | None = None  # 服务显示名，仅用于展示与日志增强。
-    description: str = ""  # 服务说明文本，仅用于展示与日志增强。
-    enabled: bool = True  # 是否启用当前服务。
-    timeout_seconds: float | None = None  # 通用会话级超时，统一映射到 ClientSession 读超时。
+    server_id: str
+    transport: str
+    name: str | None = None
+    description: str = ""
+    enabled: bool = True
+    timeout_seconds: float | None = None
     command: str | None = None  # stdio 模式下的启动命令。
     args: list[str] | None = None  # stdio 模式下的启动参数列表。
     env: dict[str, str] | None = None  # stdio 模式下的附加环境变量。
@@ -48,10 +48,10 @@ class MCPServerConfig:
 class MCPConnection:
     """单个 MCP 服务连接上下文。"""
 
-    server_id: str  # 保存服务标识。
-    transport_context: Any  # 保存 transport 上下文管理器。
-    session_context: Any  # 保存 session 上下文管理器。
-    session: Any  # 保存已初始化的 ClientSession 实例。
+    server_id: str
+    transport_context: Any
+    session_context: Any
+    session: Any
 
 
 class _LoopThread:
@@ -179,13 +179,13 @@ class MCPClientManager:
         normalized_text = MCPClientManager._strip_json_comments(raw_text)  # 先移除 JSONC 风格注释，便于示例配置直接落在同一文件中。
         if not normalized_text.strip():  # 判断文件内容是否为空。
             return []  # 文件内容为空时直接返回空列表，避免解析异常。
-        try:  # 尝试解析 JSON。
+        try:
             raw_data = json.loads(normalized_text)  # 把文本解析为 Python 数据结构。
         except json.JSONDecodeError as exc:  # 捕获 JSON 解析失败异常。
             raise ValueError(f"MCP 配置文件不是合法 JSON: {config_path}") from exc  # 抛出更明确的业务错误。
         if not isinstance(raw_data, list):  # 判断顶层结构是否为列表。
             raise ValueError(f"MCP 配置文件必须是数组: {config_path}")  # 抛出结构错误。
-        configs: list[MCPServerConfig] = []  # 初始化配置结果列表。
+        configs: list[MCPServerConfig] = []
         for index, item in enumerate(raw_data):  # 遍历每一个服务配置项。
             if not isinstance(item, dict):  # 判断单项是否为对象。
                 raise ValueError(f"MCP 配置项必须是对象: index={index}")  # 抛出结构错误。
@@ -250,7 +250,7 @@ class MCPClientManager:
     @staticmethod  # 声明静态方法。
     def _strip_json_comments(raw_text: str) -> str:  # 定义注释剥离方法。
         """移除 JSONC 风格的行注释与块注释。"""
-        result: list[str] = []  # 初始化结果字符列表。
+        result: list[str] = []
         in_string = False  # 标记当前是否处于字符串内部。
         escaped = False  # 标记当前字符是否处于转义状态。
         in_line_comment = False  # 标记当前是否处于 `//` 行注释中。
@@ -380,8 +380,8 @@ class MCPClientManager:
         if self._loop_thread is not None:  # 判断管理器是否已经启动。
             return  # 若已启动则直接返回，避免重复初始化。
         self._loop_thread = _LoopThread()  # 创建后台事件循环线程。
-        try:  # 尝试在后台线程中建立所有远端连接。
-            started_future: Future[None] = Future()  # 创建跨线程启动结果句柄，用于等待生命周期任务完成初始化。
+        try:
+            started_future: Future[None] = Future()
             self._lifecycle_future = self._loop_thread.submit(self._run_lifecycle(started_future))  # 启动长期存活的生命周期任务，统一持有连接进入与退出。
             started_future.result()  # 同步等待生命周期任务完成连接建立与工具发现。
         except Exception:  # 捕获启动过程中的任意异常。
@@ -395,7 +395,7 @@ class MCPClientManager:
     async def _run_lifecycle(self, started_future: Future[None]) -> None:  # 定义长期生命周期任务。
         """在同一个后台任务里完成连接建立、持有与关闭。"""
         self._close_event = asyncio.Event()  # 创建关闭信号，供外部关闭阶段唤醒当前生命周期任务。
-        try:  # 尝试完成所有连接建立与工具发现。
+        try:
             for config in self._configs:  # 遍历所有服务配置。
                 if not config.enabled:  # 对显式禁用的配置直接跳过。
                     continue  # 不建立连接，也不注册工具。
@@ -422,16 +422,16 @@ class MCPClientManager:
             if not started_future.done():  # 判断启动结果是否尚未返回给调用方。
                 started_future.set_exception(exc)  # 把启动异常同步给创建线程，阻止应用带错启动。
             raise  # 继续向上抛出异常，让生命周期 Future 保持失败态。
-        finally:  # 无论正常关闭还是异常失败，都在同一任务内释放上下文。
-            try:  # 尝试执行同任务关闭，避免 SDK 的 TaskGroup 跨任务退出。
+        finally:
+            try:
                 await self._async_close()  # 在当前生命周期任务内逆序释放所有已打开连接。
-            finally:  # 收尾清理生命周期状态。
+            finally:
                 self._close_event = None  # 清空关闭信号引用，避免外部继续误用旧对象。
 
     async def _list_all_tool_items(self, session: Any) -> list[Any]:  # 定义分页拉全辅助方法。
         """沿着 nextCursor 拉取某个 MCP 服务的全量工具描述。"""
-        tool_items: list[Any] = []  # 初始化全量工具描述列表。
-        cursor: str | None = None  # 初始化分页游标，None 表示从首页开始。
+        tool_items: list[Any] = []
+        cursor: str | None = None
         while True:  # 循环拉取，直到服务端不再返回 nextCursor。
             tools_response = await session.list_tools(cursor=cursor)  # 按当前游标拉取一页工具列表。
             page_tools = getattr(tools_response, "tools", [])  # 读取当前页工具列表字段。
@@ -459,7 +459,7 @@ class MCPClientManager:
         async def _open_and_initialize() -> MCPConnection:  # 定义内部打开协程，便于统一套启动超时。
             transport_context = None  # 初始化 transport 上下文引用。
             session_context = None  # 初始化 session 上下文引用。
-            try:  # 尝试完成 transport 与 session 初始化。
+            try:
                 transport_context = stdio_module.stdio_client(  # 构造 stdio transport 上下文。
                     server_parameters_cls(  # 构造 stdio 服务参数。
                         command=config.command,  # 传入启动命令。
@@ -485,7 +485,7 @@ class MCPClientManager:
                     await transport_context.__aexit__(None, None, None)  # 关闭已进入的 transport 上下文。
                 raise  # 继续向上抛出异常，让启动阶段失败。
 
-        try:  # 尝试按配置建立连接。
+        try:
             if config.startup_timeout_seconds is None:  # 若未配置启动超时，则直接执行。
                 return await _open_and_initialize()  # 返回建立完成的连接。
             return await asyncio.wait_for(_open_and_initialize(), timeout=config.startup_timeout_seconds)  # 按配置超时包裹启动阶段。
@@ -497,7 +497,7 @@ class MCPClientManager:
         http_module = self._import_module("mcp.client.streamable_http")  # 动态导入 HTTP 客户端模块。
         transport_context = None  # 初始化 transport 上下文引用。
         session_context = None  # 初始化 session 上下文引用。
-        try:  # 尝试完成 transport 与 session 初始化。
+        try:
             http_client = self._create_streamable_http_client(config)  # 按配置创建自定义 httpx.AsyncClient。
             transport_context = _ManagedStreamableHTTPTransportContext(  # 组合 transport 与 http client 生命周期。
                 transport_context=http_module.streamable_http_client(config.url, http_client=http_client),  # 构造 streamable-http transport 上下文。
@@ -538,7 +538,7 @@ class MCPClientManager:
         default_sse_read_timeout_seconds = float(getattr(httpx_utils_module, "MCP_DEFAULT_SSE_READ_TIMEOUT", 300.0))  # 读取 MCP SDK 默认 SSE 读取超时。
         timeout_seconds = config.timeout_seconds if config.timeout_seconds is not None else default_timeout_seconds  # 仅覆盖普通请求超时，SSE 读取超时仍保留官方默认值。
         timeout = httpx_module.Timeout(timeout_seconds, read=default_sse_read_timeout_seconds)  # 构造 httpx 超时对象。
-        client_kwargs: dict[str, Any] = {  # 初始化 AsyncClient 构造参数。
+        client_kwargs: dict[str, Any] = {
             "timeout": timeout,  # 注入请求超时配置。
             "verify": config.verify_ssl if config.verify_ssl is not None else True,  # 注入证书校验开关，缺省仍保持安全默认值。
             "follow_redirects": config.follow_redirects if config.follow_redirects is not None else True,  # 注入重定向开关，缺省与 MCP SDK 默认行为一致。
@@ -555,12 +555,12 @@ class MCPClientManager:
         """关闭所有 MCP 连接并停止后台线程。"""
         if self._loop_thread is None:  # 判断是否存在后台线程。
             return  # 若从未启动，则无需做任何清理。
-        try:  # 尝试先等待生命周期任务在同一任务内完成关闭。
+        try:
             if self._close_event is not None:  # 判断生命周期任务是否已经进入等待关闭状态。
                 self._loop_thread.call_soon(self._close_event.set)  # 在线程安全上下文里触发关闭信号，唤醒生命周期任务执行同任务退出。
             if self._lifecycle_future is not None:  # 判断是否存在生命周期任务句柄。
                 await asyncio.wrap_future(self._lifecycle_future)  # 等待生命周期任务完整退出，确保资源全部释放。
-        finally:  # 无论关闭过程是否成功，都要停止后台线程并清理引用。
+        finally:
             self._loop_thread.stop()  # 关闭后台线程。
             self._loop_thread = None  # 清空线程引用。
             self._lifecycle_future = None  # 清空生命周期任务句柄，避免保留旧状态。
@@ -568,9 +568,9 @@ class MCPClientManager:
     async def _async_close(self) -> None:  # 定义异步关闭实现。
         """在后台事件循环里关闭所有连接上下文。"""
         for connection in reversed(self._connections):  # 按逆序关闭所有连接，保证资源释放顺序正确。
-            try:  # 尝试关闭 session 上下文。
+            try:
                 await connection.session_context.__aexit__(None, None, None)  # 关闭 session 上下文。
-            finally:  # 无论 session 关闭是否报错，都继续关闭 transport。
+            finally:
                 await connection.transport_context.__aexit__(None, None, None)  # 关闭 transport 上下文。
         self._connections.clear()  # 清空连接缓存列表。
         self._tools.clear()  # 清空工具缓存列表。
@@ -596,7 +596,7 @@ class MCPClientManager:
 
     def _import_module(self, module_name: str) -> Any:  # 定义动态导入辅助方法。
         """动态导入模块，并在缺依赖时给出更明确错误。"""
-        try:  # 尝试导入目标模块。
+        try:
             return importlib.import_module(module_name)  # 返回成功导入的模块对象。
         except ModuleNotFoundError as exc:  # 捕获缺依赖错误。
             raise ModuleNotFoundError("缺少官方 MCP Python SDK，请先安装 `mcp` 依赖") from exc  # 抛出更明确的依赖提示。

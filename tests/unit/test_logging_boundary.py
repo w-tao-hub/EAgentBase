@@ -1,8 +1,8 @@
 """日志依赖边界测试。"""
 
-from __future__ import annotations  # 启用未来注解，统一测试文件语法风格
+from __future__ import annotations
 
-from pathlib import Path  # 导入路径工具，便于扫描源码目录
+from pathlib import Path
 
 
 def test_upper_layers_do_not_import_infra_logging_get_logger() -> None:
@@ -15,7 +15,7 @@ def test_upper_layers_do_not_import_infra_logging_get_logger() -> None:
     ]
     banned_import = "from app.infra.logging import get_logger"  # 禁止继续出现在上层代码中的导入语句
 
-    violating_files: list[str] = []  # 收集所有违反边界的文件，失败时一次性给出完整清单
+    violating_files: list[str] = []
 
     for directory in target_directories:  # 逐个扫描受约束的源码目录
         for file_path in directory.rglob("*.py"):  # 遍历目录下全部 Python 文件

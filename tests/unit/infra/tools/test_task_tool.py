@@ -4,16 +4,16 @@
 以及 child 递归调用禁止等核心逻辑。
 """
 
-from __future__ import annotations  # 启用未来注解，避免前向引用问题
+from __future__ import annotations
 
-from dataclasses import dataclass  # 导入数据类装饰器，用于 FakeChildResult
+from dataclasses import dataclass
 
-import pytest  # 导入 pytest 测试框架
+import pytest
 
-from app.core.models.error import ErrorCode  # 导入错误码枚举，用于断言错误响应
-from app.core.models.execution_context import ExecutionContext  # 导入执行上下文模型
-from app.infra.tools.task_tool import TaskTool  # 导入被测试的 TaskTool 类
-from tests.fakes import create_fake_agent  # 导入辅助函数，用于构造假 Agent
+from app.core.models.error import ErrorCode
+from app.core.models.execution_context import ExecutionContext
+from app.infra.tools.task_tool import TaskTool
+from tests.fakes import create_fake_agent
 
 
 @dataclass  # 使用数据类封装 child 执行结果

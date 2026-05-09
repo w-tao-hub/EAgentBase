@@ -1,14 +1,14 @@
 """Run 领域模型及状态枚举定义。"""
 
-from __future__ import annotations  # 启用未来注解，避免前向引用问题
+from __future__ import annotations
 
-from datetime import datetime  # 导入日期时间类
-from enum import Enum  # 导入枚举基类
-from typing import Optional  # 导入可选类型
+from datetime import datetime
+from enum import Enum
+from typing import Optional
 
-from pydantic import BaseModel, Field, model_validator  # 导入 Pydantic v2 的基础模型和字段工具
+from pydantic import BaseModel, Field, model_validator
 
-from app.core.models.error import ErrorCode  # 导入错误码枚举，保持 Run 的错误码类型一致
+from app.core.models.error import ErrorCode
 
 
 class RunStatus(str, Enum):
@@ -17,36 +17,23 @@ class RunStatus(str, Enum):
     使用 str + Enum 的组合，保证状态值在序列化时自动变为可读字符串。
     """
 
-    # 运行正在执行中，尚未结束
     RUNNING = "running"
-
-    # 运行已正常完成
     COMPLETED = "completed"
-
-    # 运行因错误中断
     FAILED = "failed"
-
-    # 运行被外部取消
     CANCELLED = "cancelled"
 
 
 class RunType(str, Enum):
     """表示 Run 的执行类型。"""
 
-    # 主代理在顶层会话中的一次执行
     MASTER = "master"
-
-    # 子代理在会话内某个 child_id 上的一次执行
     CHILD = "child"
 
 
 class ExecutionMode(str, Enum):
     """表示 Run 的执行模式。"""
 
-    # 前台模式：当前请求需要等待结果
     FOREGROUND = "foreground"
-
-    # 后台模式：当前请求只触发执行，不必等待结果
     BACKGROUND = "background"
 
 
@@ -56,53 +43,22 @@ class Run(BaseModel):
     Run 跟踪从请求发起到结果生成的完整生命周期，并记录可能的错误信息。
     """
 
-    # 运行的唯一标识符
     run_id: str = Field(min_length=1)
-
-    # 本次运行所属的会话标识符
     session_id: str = Field(min_length=1)
-
-    # 当前运行状态，使用 RunStatus 枚举进行强约束
     status: RunStatus
-
-    # 本次运行实际使用的代理 ID；当前阶段为了兼容旧调用方先保持可选
     agent_id: str | None = None
-
-    # Run 类型；默认仍按现有单主代理链路视为 master
     run_type: RunType = RunType.MASTER
-
-    # child run 指向派发它的 master run；master run 不应设置该字段
     parent_run_id: str | None = None
-
-    # child run 所属的会话内稳定 child_id；master run 不应设置该字段
     child_id: str | None = None
-
-    # child run 对应父消息里的工具调用 ID；master run 不应设置该字段
     tool_call_id: str | None = None
-
-    # Run 的执行模式；当前现有主链路默认都是 foreground
     execution_mode: ExecutionMode = ExecutionMode.FOREGROUND
-
-    # 运行创建时间
     created_at: datetime
-
-    # 最近一次更新时间；为了兼容旧调用方，允许缺省后回填为 created_at
+    # 为了兼容旧调用方，允许缺省后回填为 created_at
     updated_at: datetime | None = None
-
-    # 请求元数据，用于权限控制和业务上下文追踪
-    # 包含用户ID、租户ID、权限信息等，可选字段
     metadata: Optional[dict] = None
-
-    # 运行结束时间，未完成时可为 None
     finished_at: Optional[datetime] = None
-
-    # 运行成功后的输出内容，尚未完成时可为 None
     output: Optional[str] = None
-
-    # 若运行失败，记录对应的错误码；成功或未完成时可为 None
     error_code: Optional[ErrorCode] = None
-
-    # 若运行失败，记录人类可读的错误描述；成功或未完成时可为 None
     error_message: Optional[str] = None
 
     # 使用 model_validator(mode="after") 的原因是：

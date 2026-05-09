@@ -1,22 +1,15 @@
-"""RunControlService 实现。
+from __future__ import annotations
 
-提供 Run 查询能力。
-"""
+import logging
+from typing import TYPE_CHECKING
 
-from __future__ import annotations  # 启用未来注解
+from app.core.models.run import Run
+from app.core.models.error import AppError, ErrorCode
 
-import logging  # 导入标准库日志模块，避免 services 依赖 infra 包路径
-from typing import TYPE_CHECKING  # 导入类型检查标记
-
-from app.core.models.run import Run  # 导入 Run 模型
-from app.core.models.error import AppError, ErrorCode  # 导入错误模型和枚举
-
-# 获取模块级日志器。
-# 直接使用标准库 logging，保持 services 层不依赖 infra 包路径。
 logger = logging.getLogger(__name__)
 
-if TYPE_CHECKING:  # 仅在类型检查时导入
-    from app.infra.store.redis_run_store import RedisRunStore  # Run 存储类型
+if TYPE_CHECKING:
+    from app.infra.store.redis_run_store import RedisRunStore
 
 
 class RunControlService:
@@ -27,10 +20,10 @@ class RunControlService:
     2. 返回类型化的结果（Run 或 AppError）
     """
 
-    def __init__(  # 构造函数
+    def __init__(
         self,
-        run_store: RedisRunStore,  # Run 存储实例
-        chat_service: object,  # ChatService 实例，用于代理取消请求
+        run_store: RedisRunStore,
+        chat_service: object,
     ) -> None:
         """初始化 RunControlService。
 
@@ -38,10 +31,10 @@ class RunControlService:
             run_store: 用于持久化和查询 Run 的存储
             chat_service: 聊天服务实例，用于发送运行取消信号
         """
-        self._run_store = run_store  # 保存 Run 存储引用
-        self._chat_service = chat_service  # 保存聊天服务引用
+        self._run_store = run_store
+        self._chat_service = chat_service
 
-    async def get_run(self, run_id: str) -> Run | AppError:  # 获取 Run
+    async def get_run(self, run_id: str) -> Run | AppError:
         """根据 run_id 查询 Run。
 
         Args:
@@ -52,20 +45,19 @@ class RunControlService:
         """
         logger.debug("查询 Run: run_id=%s", run_id)
 
-        # 从存储查询
-        run = await self._run_store.get_run(run_id)  # 查询 Run
+        run = await self._run_store.get_run(run_id)
 
-        if run is None:  # Run 不存在
+        if run is None:
             logger.error("Run 不存在: run_id=%s", run_id)
-            return AppError(  # 返回错误对象
-                error_code=ErrorCode.RUN_NOT_FOUND,  # 错误码：Run 不存在
-                message=f"Run {run_id} not found",  # 错误消息
+            return AppError(
+                error_code=ErrorCode.RUN_NOT_FOUND,
+                message=f"Run {run_id} not found",
             )
 
         logger.debug("查询 Run 成功: run_id=%s, status=%s", run_id, run.status.value)
-        return run  # 返回 Run 实例
+        return run
 
-    def cancel_run(self, run_id: str) -> bool:  # 取消 Run
+    def cancel_run(self, run_id: str) -> bool:
         """代理到 ChatService 发送取消信号。
 
         Args:

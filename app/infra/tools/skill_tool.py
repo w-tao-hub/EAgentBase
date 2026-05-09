@@ -1,12 +1,12 @@
 """SkillTool 实现。"""
 
-from __future__ import annotations  # 启用未来注解，避免前向引用问题。
+from __future__ import annotations
 
-from datetime import datetime, timezone  # 导入时间工具，给附带会话消息生成时间戳。
+from datetime import datetime, timezone
 
-from app.core.models.stored_message import StoredMessage  # 导入存储消息模型，用于构造 isMeta 消息。
-from app.core.models.tool import Tool, ToolResult  # 导入工具抽象与工具结果。
-from app.infra.skills.catalog import SkillCatalog  # 导入运行时 skill 索引。
+from app.core.models.stored_message import StoredMessage
+from app.core.models.tool import Tool, ToolResult
+from app.infra.skills.catalog import SkillCatalog
 
 
 class SkillTool(Tool):

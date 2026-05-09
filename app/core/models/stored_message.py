@@ -1,12 +1,12 @@
 """按模型协议直接存储的消息模型定义。"""
 
-from __future__ import annotations  # 启用未来注解，避免前向引用问题
+from __future__ import annotations
 
-from datetime import datetime  # 导入日期时间类，承载消息创建时间
-from typing import Any  # 导入任意类型，兼容工具调用等协议字段
-import uuid  # 导入 UUID 模块，用于生成消息唯一标识
+from datetime import datetime
+from typing import Any
+import uuid
 
-from pydantic import BaseModel, ConfigDict, Field  # 导入 Pydantic 模型与字段工具
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class StoredMessageMeta(BaseModel):

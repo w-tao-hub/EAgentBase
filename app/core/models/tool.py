@@ -4,15 +4,15 @@
 为智能体提供统一的工具调用接口。
 """
 
-from __future__ import annotations  # 启用未来注解，避免前向引用问题
+from __future__ import annotations
 
-from abc import ABC, abstractmethod  # 导入抽象基类和抽象方法装饰器
-from dataclasses import dataclass  # 导入数据类装饰器
-from typing import Dict, List, Optional, TYPE_CHECKING  # 导入类型提示
+from abc import ABC, abstractmethod
+from dataclasses import dataclass
+from typing import Dict, List, Optional, TYPE_CHECKING
 
-if TYPE_CHECKING:  # 仅在类型检查时导入，避免循环导入
-    from app.core.models.execution_context import ExecutionContext  # 导入执行上下文类型
-    from app.core.models.stored_message import StoredMessage  # 导入存储消息类型，供工具附带消息使用。
+if TYPE_CHECKING:
+    from app.core.models.execution_context import ExecutionContext
+    from app.core.models.stored_message import StoredMessage
 
 
 @dataclass
@@ -32,40 +32,33 @@ class ToolResult:
     封装工具调用的输出内容和错误状态，统一返回格式。
     """
 
-    # 工具输出内容，可以是任意文本形式的结果
     content: str
-
-    # 标记是否为错误结果，True 表示执行出错
     is_error: bool = False
-
-    # 工具可选附带一条存储消息，供执行链直接拼入模型上下文并持久化。
     stored_message: "StoredMessage | None" = None
-
-    # 工具内部元数据，当前仅 Task 工具会填充。
     meta: ToolResultMeta | None = None
 
 
-@dataclass  # 数据类装饰器，用于替代元组存储待执行工具信息
+@dataclass
 class ToolExecuteItem:
     """待执行工具项数据类。
 
     用于存储工具调用的完整信息，替代 tuple[str, str, dict, Tool]。
     """
-    tool_call_id: str  # 工具调用唯一标识
-    tool_name: str  # 工具名称
-    tool_input: dict  # 工具输入参数
-    tool: "Tool"  # 工具实例（使用字符串前向引用避免循环导入）
+    tool_call_id: str
+    tool_name: str
+    tool_input: dict
+    tool: "Tool"
 
 
-@dataclass  # 数据类装饰器，用于替代元组存储工具执行结果
+@dataclass
 class ToolExecuteResult:
     """工具执行结果数据类。
 
     用于存储工具执行的返回结果，替代 tuple[str, str, ToolResult]。
     """
-    tool_call_id: str  # 工具调用唯一标识
-    tool_name: str  # 工具名称
-    result: ToolResult  # 工具执行结果
+    tool_call_id: str
+    tool_name: str
+    result: ToolResult
 
 
 class Tool(ABC):
@@ -121,7 +114,6 @@ class Tool(ABC):
         Returns:
             bool: True 表示只读工具，False 表示可能修改状态
         """
-        # 默认返回 False，遵循 fail-closed 安全原则
         return False
 
 
@@ -133,7 +125,6 @@ class ToolRegistry:
 
     def __init__(self) -> None:
         """初始化空注册表。"""
-        # 使用字典存储工具，键为工具名，值为工具实例
         self._tools: Dict[str, Tool] = {}
 
     def register(self, tool: Tool) -> None:
@@ -145,10 +136,8 @@ class ToolRegistry:
         Raises:
             ValueError: 如果同名工具已存在
         """
-        # 检查是否已存在同名工具
         if tool.name in self._tools:
             raise ValueError(f"工具 '{tool.name}' 已注册")
-        # 将工具存入注册表
         self._tools[tool.name] = tool
 
     def get(self, name: str) -> Optional[Tool]:
@@ -160,7 +149,6 @@ class ToolRegistry:
         Returns:
             Tool | None: 找到的工具实例，不存在则返回 None
         """
-        # 从字典中查找工具
         return self._tools.get(name)
 
     def to_llm_tools(self) -> List[dict]:
@@ -172,15 +160,14 @@ class ToolRegistry:
         Returns:
             list[dict]: 工具定义列表，每个元素包含 type、function 等字段
         """
-        # 遍历所有注册工具，生成 LLM API 格式
         result: List[dict] = []
         for tool in self._tools.values():
             tool_def = {
-                "type": "function",  # 工具类型为 function
+                "type": "function",
                 "function": {
-                    "name": tool.name,  # 函数名称
-                    "description": tool.description,  # 函数描述
-                    "parameters": tool.input_schema,  # 参数 schema
+                    "name": tool.name,
+                    "description": tool.description,
+                    "parameters": tool.input_schema,
                 },
             }
             result.append(tool_def)
@@ -192,7 +179,6 @@ class ToolRegistry:
         Returns:
             list[str]: 工具名称列表
         """
-        # 返回所有注册工具的键（名称）
         return list(self._tools.keys())
 
     def unregister(self, name: str) -> bool:
@@ -204,24 +190,19 @@ class ToolRegistry:
         Returns:
             bool: 成功注销返回 True，工具不存在返回 False
         """
-        # 检查工具是否存在
         if name in self._tools:
-            # 从字典中删除工具
             del self._tools[name]
             return True
         return False
 
     def clear(self) -> None:
         """清空所有注册的工具。"""
-        # 重置字典为空
         self._tools = {}
 
     def __len__(self) -> int:
         """返回已注册工具数量。"""
-        # 返回字典键值对数量
         return len(self._tools)
 
     def __contains__(self, name: str) -> bool:
         """检查是否包含指定名称的工具。"""
-        # 使用 in 操作符检查键是否存在
         return name in self._tools

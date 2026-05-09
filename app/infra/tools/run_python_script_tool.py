@@ -4,14 +4,14 @@
 执行 workspace_root 下已有的 .py 脚本，并安全地透传参数与结果。
 """
 
-from __future__ import annotations  # 启用未来注解
+from __future__ import annotations
 
-import asyncio  # 导入异步 IO 模块，用于创建子进程
-import os  # 导入操作系统模块，用于检查文件可执行权限
-from pathlib import Path  # 导入 Path，用于路径校验与拼接
-from typing import Any, Dict  # 导入类型提示
+import asyncio
+import os
+from pathlib import Path
+from typing import Any, Dict
 
-from app.core.models.tool import Tool, ToolResult  # 导入工具基类与结果模型
+from app.core.models.tool import Tool, ToolResult
 
 # 默认超时时间（秒），v1 使用固定常量
 DEFAULT_TIMEOUT_SECONDS = 60

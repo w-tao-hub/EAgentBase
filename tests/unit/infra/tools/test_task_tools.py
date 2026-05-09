@@ -1,19 +1,19 @@
 """任务工具单元测试。"""
 
-from __future__ import annotations  # 启用未来注解
+from __future__ import annotations
 
-import json  # 导入 JSON 模块
+import json
 
-import pytest  # 导入 pytest 测试框架
+import pytest
 
-from app.core.models.execution_context import ExecutionContext  # 导入执行上下文
-from app.core.models.tool import ToolRegistry, ToolResult  # 导入工具注册表与结果模型
-from app.infra.store.redis_task_store import RedisTaskStore  # 导入任务存储
-from app.infra.tools.plan_create_tool import PlanCreateTool  # 导入计划创建工具
-from app.infra.tools.plan_get_tool import PlanGetTool  # 导入计划详情工具
-from app.infra.tools.plan_list_tool import PlanListTool  # 导入计划列表工具
-from app.infra.tools.plan_update_tool import PlanUpdateTool  # 导入计划更新工具
-from app.services.task_service import TaskService  # 导入任务服务
+from app.core.models.execution_context import ExecutionContext
+from app.core.models.tool import ToolRegistry, ToolResult
+from app.infra.store.redis_task_store import RedisTaskStore
+from app.infra.tools.plan_create_tool import PlanCreateTool
+from app.infra.tools.plan_get_tool import PlanGetTool
+from app.infra.tools.plan_list_tool import PlanListTool
+from app.infra.tools.plan_update_tool import PlanUpdateTool
+from app.services.task_service import TaskService
 
 
 @pytest.fixture  # 定义测试夹具
@@ -31,7 +31,7 @@ async def tools(fake_redis):
 
 def _ctx(session_id: str = "s1", run_type: str = "master", child_id: str | None = None) -> ExecutionContext:
     """快速构造执行上下文辅助函数。"""
-    from app.core.models.agent import Agent  # 延迟导入避免循环
+    from app.core.models.agent import Agent
     agent = Agent(
         agent_id="a1",
         name="Test",

@@ -1,14 +1,14 @@
 """RedisRunStore 的单元测试。"""
 
-from __future__ import annotations  # 启用未来注解
+from __future__ import annotations
 
-from datetime import datetime, timezone  # 导入日期时间类和 UTC 时区
+from datetime import datetime, timezone
 
-import pytest  # 导入 pytest 测试框架
+import pytest
 
-from app.core.models.run import ExecutionMode, Run, RunStatus, RunType  # 导入 Run 模型和状态枚举
-from app.core.models.error import ErrorCode  # 导入错误码枚举
-from app.infra.store.redis_run_store import RedisRunStore  # 导入被测类
+from app.core.models.run import ExecutionMode, Run, RunStatus, RunType
+from app.core.models.error import ErrorCode
+from app.infra.store.redis_run_store import RedisRunStore
 
 
 @pytest.mark.asyncio  # 标记为异步测试

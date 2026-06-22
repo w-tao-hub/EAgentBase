@@ -135,51 +135,111 @@ class Container:
     _agent_provider: "object" = field(default=None, repr=False)
 
     @staticmethod
-    def _create_redis(settings: Settings) -> "Redis":
-        """创建 Redis 客户端。
+    def _build_redis_client_kwargs() -> dict[str, object]:
+        """构建主 Redis 客户端通用连接参数。"""
+        # 这些参数同时用于单点模式和 Sentinel 模式下的 master 客户端。
+        return {
+            "decode_responses": True,
+            "socket_keepalive": True,
+            # socket_keepalive_options 仅 Linux 支持，macOS/Windows 会报错，因此这里不显式传。
+            "health_check_interval": 30,
+            "socket_connect_timeout": 5,
+            "socket_timeout": 30,
+            "retry_on_timeout": True,
+            "retry_on_error": [ConnectionError, TimeoutError],
+        }
 
-        将 Redis 连接细节收口在容器内部，避免把基础设施创建逻辑散落到应用工厂。
-        测试若需替换 Redis，应 patch 该 helper，而不是扩张 create_app 的参数面。
-        """
+    @classmethod
+    def _build_single_redis_client(cls, settings: Settings, max_connections: int) -> "Redis":
+        """基于单点 URL 创建 Redis 客户端。"""
         import redis.asyncio as aioredis
 
+        client_kwargs = cls._build_redis_client_kwargs()
+        if settings.redis_url is None:
+            raise ValueError("REDIS_MODE=single 时必须提供 REDIS_URL")
         pool = aioredis.BlockingConnectionPool.from_url(
             settings.redis_url,
-            max_connections=50,
+            max_connections=max_connections,
             timeout=5,
-            decode_responses=True,
-            socket_keepalive=True,
-            # socket_keepalive_options 仅 Linux 支持, macOS/Windows 会报错
-            health_check_interval=30,
-            socket_connect_timeout=5,
-            socket_timeout=30,
-            retry_on_timeout=True,
-            retry_on_error=[ConnectionError, TimeoutError],
+            **client_kwargs,
         )
         return aioredis.Redis(connection_pool=pool)
 
     @staticmethod
-    def _create_pubsub_redis(settings: Settings) -> "Redis":
-        """创建 pubsub 专用 Redis 客户端。
+    def _build_sentinel_kwargs(settings: Settings) -> dict[str, object]:
+        """构建 Sentinel 节点连接参数。"""
+        sentinel_kwargs: dict[str, object] = {
+            "decode_responses": True,
+            "socket_keepalive": True,
+            "socket_connect_timeout": 5,
+            "socket_timeout": 30,
+        }
+        # 当前版本默认让 Sentinel 与 master 共用同一套认证信息。
+        if settings.redis_username is not None:
+            sentinel_kwargs["username"] = settings.redis_username
+        if settings.redis_password is not None:
+            sentinel_kwargs["password"] = settings.redis_password
+        return sentinel_kwargs
 
-        该客户端只服务 ChatService 的全局取消监听器，
-        因此连接池保持极小规模，避免和普通读写命令争抢主连接池容量。
-        """
-        import redis.asyncio as aioredis
+    @classmethod
+    def _build_sentinel_connection_kwargs(cls, settings: Settings) -> dict[str, object]:
+        """构建 Sentinel 模式下 master Redis 的通用连接参数。"""
+        master_kwargs = cls._build_redis_client_kwargs()
+        master_kwargs["db"] = settings.redis_db
+        if settings.redis_username is not None:
+            master_kwargs["username"] = settings.redis_username
+        if settings.redis_password is not None:
+            master_kwargs["password"] = settings.redis_password
+        return master_kwargs
 
-        pool = aioredis.BlockingConnectionPool.from_url(
-            settings.redis_url,
-            max_connections=2,
-            timeout=5,
-            decode_responses=True,
-            socket_keepalive=True,
-            health_check_interval=30,
-            socket_connect_timeout=5,
-            socket_timeout=30,
-            retry_on_timeout=True,
-            retry_on_error=[ConnectionError, TimeoutError],
+    @staticmethod
+    def _parse_sentinel_nodes(nodes: list[str]) -> list[tuple[str, int]]:
+        """把 `host:port` 形式的节点列表解析成 Sentinel 所需元组。"""
+        parsed_nodes: list[tuple[str, int]] = []
+        for node in nodes:
+            # Sentinel 环境变量当前约定为 `host:port`；这里在容器边界做显式校验。
+            host, separator, raw_port = node.rpartition(":")
+            if separator == "" or host.strip() == "" or raw_port.strip() == "":
+                raise ValueError(f"无效的 REDIS_SENTINEL_NODES 节点格式: {node}")
+            try:
+                parsed_nodes.append((host.strip(), int(raw_port.strip())))
+            except ValueError as exc:
+                raise ValueError(f"REDIS_SENTINEL_NODES 端口必须是整数: {node}") from exc
+        return parsed_nodes
+
+    @classmethod
+    def _build_sentinel_redis_client(cls, settings: Settings, max_connections: int) -> "Redis":
+        """基于 Sentinel 创建指向当前 master 的 Redis 客户端。"""
+        from redis.asyncio.sentinel import Sentinel
+
+        sentinel = Sentinel(
+            cls._parse_sentinel_nodes(settings.redis_sentinel_nodes),
+            sentinel_kwargs=cls._build_sentinel_kwargs(settings),
+            **cls._build_sentinel_connection_kwargs(settings),
         )
-        return aioredis.Redis(connection_pool=pool)
+        # master_for 返回的仍是标准 asyncio Redis 客户端，后续 store/service 无需感知 Sentinel。
+        return sentinel.master_for(
+            settings.redis_sentinel_master_name,
+            max_connections=max_connections,
+        )
+
+    @classmethod
+    def _create_redis(cls, settings: Settings) -> "Redis":
+        """创建主 Redis 客户端。"""
+        # 将 Redis 连接细节收口在容器内部，避免把基础设施创建逻辑散落到应用工厂。
+        # 测试若需替换 Redis，应 patch 该 helper，而不是扩张 create_app 的参数面。
+        if settings.redis_mode == "sentinel":
+            return cls._build_sentinel_redis_client(settings, max_connections=50)
+        return cls._build_single_redis_client(settings, max_connections=50)
+
+    @classmethod
+    def _create_pubsub_redis(cls, settings: Settings) -> "Redis":
+        """创建 pubsub 专用 Redis 客户端。"""
+        # 该客户端只服务 ChatService 的全局取消监听器，
+        # 因此连接池保持极小规模，避免和普通读写命令争抢主连接池容量。
+        if settings.redis_mode == "sentinel":
+            return cls._build_sentinel_redis_client(settings, max_connections=2)
+        return cls._build_single_redis_client(settings, max_connections=2)
 
     @staticmethod
     async def _warmup_redis_pool(redis: "Redis", target_connections: int = 150) -> None:

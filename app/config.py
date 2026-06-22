@@ -1,9 +1,11 @@
 """应用配置定义。"""
 
+import json
 import multiprocessing
+from typing import Annotated, Any
 
-from pydantic import Field
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import Field, field_validator, model_validator
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
 def _get_cpu_count() -> int:
@@ -32,7 +34,29 @@ class Settings(BaseSettings):
     app_port: int = Field(default=8000, ge=1, le=65535)
     app_env: str = Field(default="dev", pattern=r"^(dev|prod)$")
 
-    redis_url: str = Field(min_length=1)
+    # Redis 支持两种模式：
+    # 1. single：沿用单点 REDIS_URL。
+    # 2. sentinel：通过 Sentinel 节点列表 + master 名称发现主节点。
+    redis_mode: str = Field(default="single", pattern=r"^(single|sentinel)$")
+
+    # 单点模式下使用的 Redis 连接串。
+    redis_url: str | None = Field(default=None, min_length=1)
+
+    # Sentinel 模式下使用的 Sentinel 节点列表。
+    # 环境变量支持两种写法：
+    # 1. 逗号分隔：host1:26379,host2:26379
+    # 2. JSON 数组：["host1:26379","host2:26379"]
+    redis_sentinel_nodes: Annotated[list[str], NoDecode] = Field(default_factory=list)
+
+    # Sentinel 模式下用于发现主节点的 service name。
+    redis_sentinel_master_name: str | None = Field(default=None, min_length=1)
+
+    # Sentinel 模式下主 Redis 使用的逻辑库编号。
+    redis_db: int = Field(default=0, ge=0)
+
+    # 当前版本默认让 Sentinel 与 master 共用同一套认证信息。
+    redis_username: str | None = Field(default=None, min_length=1)
+    redis_password: str | None = Field(default=None, min_length=1)
 
     redis_key_prefix: str = Field(default="agent", min_length=1)
 
@@ -91,6 +115,50 @@ class Settings(BaseSettings):
 
     # 使用项目根目录下的 mcp_servers.json 承载多服务与多传输形态配置。
     mcp_servers_config_path: str = Field(default="mcp_servers.json", min_length=1)
+
+    @field_validator("redis_sentinel_nodes", mode="before")
+    @classmethod
+    def _normalize_redis_sentinel_nodes(cls, value: Any) -> list[str]:
+        """把 Sentinel 节点输入统一转换成规范列表。"""
+        # 未配置时统一转为空列表，便于后续模式校验。
+        if value is None or value == "":
+            return []
+
+        # 环境变量最常见是字符串；这里兼容逗号分隔和 JSON 数组两种写法。
+        if isinstance(value, str):
+            normalized_value = value.strip()
+            if normalized_value == "":
+                return []
+            if normalized_value.startswith("["):
+                try:
+                    parsed_value = json.loads(normalized_value)
+                except json.JSONDecodeError as exc:
+                    raise ValueError("REDIS_SENTINEL_NODES JSON 格式不合法") from exc
+                value = parsed_value
+            else:
+                return [node.strip() for node in normalized_value.split(",") if node.strip()]
+
+        # 代码内直接传 list/tuple 时也统一收敛成字符串列表。
+        if isinstance(value, (list, tuple)):
+            return [str(node).strip() for node in value if str(node).strip()]
+
+        raise ValueError("REDIS_SENTINEL_NODES 必须是字符串或字符串列表")
+
+    @model_validator(mode="after")
+    def _validate_redis_mode_settings(self) -> "Settings":
+        """按 Redis 模式校验必填配置。"""
+        # 单点模式保持现有契约：必须提供 REDIS_URL。
+        if self.redis_mode == "single":
+            if not self.redis_url:
+                raise ValueError("REDIS_MODE=single 时必须提供 REDIS_URL")
+            return self
+
+        # Sentinel 模式下，节点列表与 master 名称缺一不可。
+        if not self.redis_sentinel_nodes:
+            raise ValueError("REDIS_MODE=sentinel 时必须提供 REDIS_SENTINEL_NODES")
+        if not self.redis_sentinel_master_name:
+            raise ValueError("REDIS_MODE=sentinel 时必须提供 REDIS_SENTINEL_MASTER_NAME")
+        return self
 
     @property
     def is_dev(self) -> bool:

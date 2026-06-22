@@ -98,6 +98,145 @@ def _patch_container_redis(monkeypatch, redis, pubsub_redis=None) -> None:
     )
 
 
+def test_create_redis_and_pubsub_redis_use_single_url_pools(monkeypatch) -> None:
+    """验证单点模式下主 Redis 与 pubsub Redis 都通过 URL 连接池创建。"""
+    import redis.asyncio as aioredis
+
+    pool_calls: list[tuple[str, dict, object]] = []
+    created_pools = [object(), object()]
+
+    class StubRedisClient:
+        """记录连接池注入结果的最小 Redis 客户端替身。"""
+
+        def __init__(self, connection_pool) -> None:
+            self.connection_pool = connection_pool
+
+    def fake_from_url(url: str, **kwargs):
+        """替换 from_url，记录每次连接池创建参数。"""
+        created_pool = created_pools[len(pool_calls)]
+        pool_calls.append((url, kwargs, created_pool))
+        return created_pool
+
+    monkeypatch.setattr(aioredis.BlockingConnectionPool, "from_url", staticmethod(fake_from_url))
+    monkeypatch.setattr(aioredis, "Redis", StubRedisClient)
+
+    settings = Settings(redis_url="redis://localhost:6379/9")
+
+    redis_client = Container._create_redis(settings)
+    pubsub_redis_client = Container._create_pubsub_redis(settings)
+
+    assert pool_calls[0][0] == "redis://localhost:6379/9"
+    assert pool_calls[0][1]["max_connections"] == 50
+    assert pool_calls[0][1]["timeout"] == 5
+    assert pool_calls[0][1]["decode_responses"] is True
+    assert pool_calls[0][1]["socket_keepalive"] is True
+    assert pool_calls[0][1]["health_check_interval"] == 30
+    assert pool_calls[0][1]["socket_connect_timeout"] == 5
+    assert pool_calls[0][1]["socket_timeout"] == 30
+    assert pool_calls[0][1]["retry_on_timeout"] is True
+    assert pool_calls[0][1]["retry_on_error"] == [ConnectionError, TimeoutError]
+
+    assert pool_calls[1][0] == "redis://localhost:6379/9"
+    assert pool_calls[1][1]["max_connections"] == 2
+    assert pool_calls[1][1]["timeout"] == 5
+
+    assert redis_client.connection_pool is created_pools[0]
+    assert pubsub_redis_client.connection_pool is created_pools[1]
+
+
+def test_create_redis_and_pubsub_redis_use_sentinel_master_discovery(monkeypatch) -> None:
+    """验证 Sentinel 模式下主 Redis 与 pubsub Redis 都通过 master discovery 创建。"""
+    import redis.asyncio.sentinel as sentinel_module
+
+    sentinel_init_calls: list[dict[str, object]] = []
+    master_for_calls: list[dict[str, object]] = []
+    created_clients = [object(), object()]
+
+    class StubSentinel:
+        """记录 Sentinel 构造与 master_for 调用参数。"""
+
+        def __init__(self, sentinels, sentinel_kwargs=None, **kwargs) -> None:
+            sentinel_init_calls.append(
+                {
+                    "sentinels": sentinels,
+                    "sentinel_kwargs": sentinel_kwargs,
+                    "kwargs": kwargs,
+                }
+            )
+
+        def master_for(self, service_name: str, **kwargs):
+            master_for_calls.append(
+                {
+                    "service_name": service_name,
+                    "kwargs": kwargs,
+                }
+            )
+            return created_clients[len(master_for_calls) - 1]
+
+    monkeypatch.setattr(sentinel_module, "Sentinel", StubSentinel)
+
+    settings = Settings(
+        redis_mode="sentinel",
+        redis_sentinel_nodes="10.0.0.1:26379,10.0.0.2:26379",
+        redis_sentinel_master_name="mymaster",
+        redis_db=5,
+        redis_username="sentinel-user",
+        redis_password="sentinel-pass",
+    )
+
+    redis_client = Container._create_redis(settings)
+    pubsub_redis_client = Container._create_pubsub_redis(settings)
+
+    assert sentinel_init_calls[0]["sentinels"] == [("10.0.0.1", 26379), ("10.0.0.2", 26379)]
+    assert sentinel_init_calls[0]["sentinel_kwargs"] == {
+        "decode_responses": True,
+        "socket_keepalive": True,
+        "socket_connect_timeout": 5,
+        "socket_timeout": 30,
+        "username": "sentinel-user",
+        "password": "sentinel-pass",
+    }
+    assert sentinel_init_calls[0]["kwargs"] == {
+        "decode_responses": True,
+        "socket_keepalive": True,
+        "health_check_interval": 30,
+        "socket_connect_timeout": 5,
+        "socket_timeout": 30,
+        "retry_on_timeout": True,
+        "retry_on_error": [ConnectionError, TimeoutError],
+        "db": 5,
+        "username": "sentinel-user",
+        "password": "sentinel-pass",
+    }
+
+    assert sentinel_init_calls[1] == sentinel_init_calls[0]
+    assert master_for_calls == [
+        {
+            "service_name": "mymaster",
+            "kwargs": {"max_connections": 50},
+        },
+        {
+            "service_name": "mymaster",
+            "kwargs": {"max_connections": 2},
+        },
+    ]
+
+    assert redis_client is created_clients[0]
+    assert pubsub_redis_client is created_clients[1]
+
+
+def test_create_redis_rejects_invalid_sentinel_node_format() -> None:
+    """验证 Sentinel 节点格式非法时会在客户端创建阶段失败。"""
+    settings = Settings(
+        redis_mode="sentinel",
+        redis_sentinel_nodes=["10.0.0.1"],
+        redis_sentinel_master_name="mymaster",
+    )
+
+    with pytest.raises(ValueError, match="无效的 REDIS_SENTINEL_NODES 节点格式"):
+        Container._create_redis(settings)
+
+
 @pytest.mark.asyncio
 async def test_container_create_keeps_hook_pipeline_empty_by_default(fake_redis, monkeypatch) -> None:
     """验证未显式传入 Hook 时，容器仍会自动装配大结果持久化 Hook。"""

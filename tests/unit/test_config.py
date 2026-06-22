@@ -3,6 +3,7 @@
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from app.bootstrap.factory import load_settings
 from app.config import Settings
@@ -20,7 +21,13 @@ def _clear_all_env_vars(monkeypatch) -> None:
         "APP_PORT",
         "APP_ENV",
         # Redis 配置
+        "REDIS_MODE",
         "REDIS_URL",
+        "REDIS_SENTINEL_NODES",
+        "REDIS_SENTINEL_MASTER_NAME",
+        "REDIS_DB",
+        "REDIS_USERNAME",
+        "REDIS_PASSWORD",
         "REDIS_KEY_PREFIX",
         "SESSION_LOCK_TTL_SECONDS",
         # LiteLLM 配置
@@ -72,7 +79,11 @@ def test_settings_reads_env_and_defaults(monkeypatch, tmp_path: Path) -> None:
 
     # 下列断言共同锁定 Task 1 的配置契约：
     # Redis 连接串必须读取环境变量，其余配置必须保持设计文档约定的默认值。
+    assert settings.redis_mode == "single"
     assert settings.redis_url == "redis://localhost:6379/9"
+    assert settings.redis_sentinel_nodes == []
+    assert settings.redis_sentinel_master_name is None
+    assert settings.redis_db == 0
     assert settings.redis_key_prefix == "agent"
     assert settings.session_lock_ttl_seconds == 30
     assert settings.app_env == "dev"
@@ -129,6 +140,65 @@ def test_environment_variables_override_dotenv_values(
 
     assert settings.redis_url == "redis://env-host:6379/9"
     assert settings.app_port == 9100
+
+
+def test_settings_reads_sentinel_config_from_env(monkeypatch, tmp_path: Path) -> None:
+    """验证 Sentinel 模式配置可以从环境变量正确读取。"""
+    monkeypatch.chdir(tmp_path)
+    _clear_all_env_vars(monkeypatch)
+
+    monkeypatch.setenv("REDIS_MODE", "sentinel")
+    monkeypatch.setenv("REDIS_SENTINEL_NODES", "10.0.0.1:26379,10.0.0.2:26379")
+    monkeypatch.setenv("REDIS_SENTINEL_MASTER_NAME", "mymaster")
+    monkeypatch.setenv("REDIS_DB", "5")
+    monkeypatch.setenv("REDIS_USERNAME", "sentinel-user")
+    monkeypatch.setenv("REDIS_PASSWORD", "sentinel-pass")
+
+    settings = Settings()
+
+    assert settings.redis_mode == "sentinel"
+    assert settings.redis_url is None
+    assert settings.redis_sentinel_nodes == ["10.0.0.1:26379", "10.0.0.2:26379"]
+    assert settings.redis_sentinel_master_name == "mymaster"
+    assert settings.redis_db == 5
+    assert settings.redis_username == "sentinel-user"
+    assert settings.redis_password == "sentinel-pass"
+
+
+@pytest.mark.parametrize(
+    ("env_vars", "expected_message"),
+    [
+        (
+            {
+                "REDIS_MODE": "sentinel",
+                "REDIS_SENTINEL_MASTER_NAME": "mymaster",
+            },
+            "REDIS_MODE=sentinel 时必须提供 REDIS_SENTINEL_NODES",
+        ),
+        (
+            {
+                "REDIS_MODE": "sentinel",
+                "REDIS_SENTINEL_NODES": "10.0.0.1:26379",
+            },
+            "REDIS_MODE=sentinel 时必须提供 REDIS_SENTINEL_MASTER_NAME",
+        ),
+    ],
+)
+def test_settings_requires_complete_sentinel_config(
+    monkeypatch,
+    tmp_path: Path,
+    env_vars: dict[str, str],
+    expected_message: str,
+) -> None:
+    """验证 Sentinel 模式下缺少关键配置会在构造阶段失败。"""
+    monkeypatch.chdir(tmp_path)
+    _clear_all_env_vars(monkeypatch)
+
+    for key, value in env_vars.items():
+        monkeypatch.setenv(key, value)
+
+    with pytest.raises(ValidationError, match=expected_message):
+        Settings()
 
 
 def test_load_settings_anchors_dotenv_and_relative_paths_to_project_root(

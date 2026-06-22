@@ -7,29 +7,17 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from datetime import datetime, timezone
 import uuid
 from typing import TYPE_CHECKING
 
+from app.core.ports.stores import PersistedToolResult
 from app.infra.logging import get_logger
 
 logger = get_logger(__name__)
 
 if TYPE_CHECKING:
     from redis.asyncio import Redis
-
-
-@dataclass(slots=True)
-class PersistedToolResult:
-    """单条已持久化工具结果记录。"""
-
-    key: str
-    session_id: str
-    tool_name: str
-    content: str
-    created_at: datetime
-    content_length: int
 
 
 class RedisToolResultStore:

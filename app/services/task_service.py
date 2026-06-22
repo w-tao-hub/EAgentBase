@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from app.core.models.task import TaskItem, TaskStatus
-from app.infra.store.redis_task_store import RedisTaskStore
+
+if TYPE_CHECKING:
+    from app.core.ports.stores import TaskStore
 
 
 def _to_camel_task(task: TaskItem) -> dict[str, Any]:
@@ -38,7 +40,7 @@ def _to_camel_summary(task: TaskItem) -> dict[str, Any]:
 class TaskService:
     """任务业务服务。"""
 
-    def __init__(self, task_store: RedisTaskStore) -> None:
+    def __init__(self, task_store: "TaskStore") -> None:
         self._task_store = task_store
 
     async def create_task(

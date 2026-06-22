@@ -268,6 +268,10 @@ async def test_container_create_keeps_hook_pipeline_empty_by_default(fake_redis,
     assert isinstance(tool_hooks[0], PersistLargeToolResultHook)  # 验证默认自动装配的是大结果持久化 Hook。
     assert isinstance(runtime._stream_text_guard, NoOpStreamTextGuard)  # 验证默认文本守卫为 no-op
 
+    # 验证新端口已注入 ChatService
+    assert container.chat_service._store_transaction is not None
+    assert container.chat_service._run_cancel_bus is not None
+
 
 @pytest.mark.asyncio
 async def test_container_create_builds_default_model_and_tool_hooks(fake_redis, monkeypatch) -> None:

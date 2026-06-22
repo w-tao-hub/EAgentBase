@@ -22,8 +22,8 @@ from app.core.runtime.context_summary_persistence import (
 )
 
 if TYPE_CHECKING:
+    from app.core.ports.stores import ContextSummaryState, SessionStore
     from app.infra.llm.litellm_adapter import LiteLLMAdapter
-    from app.infra.store.redis_session_store import ContextSummaryState, RedisSessionStore
 
 logger = logging.getLogger(__name__)
 
@@ -185,7 +185,7 @@ class TokenBudgetCompressionPolicy:
 
     def __init__(
         self,
-        session_store: "RedisSessionStore",
+        session_store: "SessionStore",
         llm_adapter: "LiteLLMAdapter",
         token_threshold: int,
     ) -> None:

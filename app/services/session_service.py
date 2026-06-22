@@ -12,8 +12,7 @@ from app.core.models.session import Session
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
-    from app.infra.store.redis_session_store import RedisSessionStore
-    from app.infra.store.redis_lock_store import RedisLockStore
+    from app.core.ports.stores import SessionStore, LockStore
     from app.services.agent_provider import AgentProvider
 
 
@@ -33,8 +32,8 @@ class SessionService:
 
     def __init__(
         self,
-        session_store: RedisSessionStore,
-        lock_store: RedisLockStore,
+        session_store: "SessionStore",
+        lock_store: "LockStore",
         agent_provider: AgentProvider,
     ) -> None:
         self._session_store = session_store

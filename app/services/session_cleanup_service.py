@@ -5,11 +5,21 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from app.core.ports.stores import SessionStore, RunStore, ToolResultStore
+
 
 class SessionCleanupService:
     """会话级联删除服务。"""
 
-    def __init__(self, session_store, run_store, tool_result_store) -> None:
+    def __init__(
+        self,
+        session_store: "SessionStore",
+        run_store: "RunStore",
+        tool_result_store: "ToolResultStore",
+    ) -> None:
         """初始化会话级联删除服务。"""
         self._session_store = session_store
         self._run_store = run_store
@@ -17,8 +27,8 @@ class SessionCleanupService:
 
     async def delete_session_cascade(self, session_id: str) -> dict[str, int]:
         """级联删除某个 session 的全部已知相关 key。"""
-        run_ids = await self._session_store.list_session_run_ids(session_id)
-        child_ids = await self._session_store.list_session_child_ids(session_id)
+        run_ids = await self._session_store.list_session_runs(session_id)
+        child_ids = await self._session_store.list_session_children(session_id)
 
         deleted_child_contexts = 0
         for child_id in child_ids:

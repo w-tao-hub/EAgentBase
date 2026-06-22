@@ -8,7 +8,7 @@
 
 当前能力边界：
 
-- 已实现：`POST /sessions`、`GET /sessions/{session_id}`、`POST /chat`、`POST /runs/{run_id}/cancel`、`GET /runs/{run_id}`、SSE 流式输出、Redis 会话持久化、会话单活跃运行锁与心跳、健康检查、日志系统、启动脚本、Tool 系统（Task 子代理派发、Plan CRUD、Skill、MCP 适配、大结果持久化与查询、Python 脚本执行）、Agent Loop 多轮编排、Hook 系统、子代理执行服务（ChildAgentRunner，支持动态工具注入）、子代理配置加载（默认 Worker + 自定义 md）、子代理上下文隔离与 session 级命名空间隔离（plan/task）、可恢复子代理列表查询（ListResumableSubagents）、取消控制（API 取消 + SSE 断链取消 + 跨进程 Redis 广播取消）、上下文摘要压缩、用户消息元数据。
+- 已实现：`POST /sessions`、`GET /sessions/{session_id}`、`POST /chat`、`POST /runs/{run_id}/cancel`、`GET /runs/{run_id}`、SSE 流式输出、Redis 会话持久化（单点与 Sentinel 双模式）、会话单活跃运行锁与心跳、健康检查、日志系统、启动脚本、Tool 系统（Task 子代理派发、Plan CRUD、Skill、MCP 适配、大结果持久化与查询、Python 脚本执行）、Agent Loop 多轮编排、Hook 系统、子代理执行服务（ChildAgentRunner，支持动态工具注入）、子代理配置加载（默认 Worker + 自定义 md）、子代理上下文隔离与 session 级命名空间隔离（plan/task）、可恢复子代理列表查询（ListResumableSubagents）、取消控制（API 取消 + SSE 断链取消 + 跨进程 Redis 广播取消）、上下文摘要压缩、用户消息元数据、Store 抽象端口层（企业可替换存储后端，默认 Redis 适配器）。
 
 - 通用智能体（Worker）：默认子代理。支持主代理动态指定可用工具列表，可执行包括所有工具在内的多样化任务。采用简化提示词设计，无领域约束，适配各类开发场景。支持 resume 恢复执行，支持 session 级命名空间隔离。可自行修改 Worker 智能体除工具列表外的其余参数。
 
@@ -40,10 +40,10 @@
 app/
 ├── __init__.py                                        应用包声明。
 ├── main.py                                            FastAPI 应用装配器；注册中间件、异常处理器、路由和依赖容器。
-├── config.py                                          `Settings` 定义；统一收口运行、Redis、日志、CORS、Uvicorn、主智能体配置。
+├── config.py                                          `Settings` 定义；统一收口运行、Redis（单点/Sentinel 双模式）、日志、CORS、Uvicorn、主智能体配置。
 ├── bootstrap/                                         组合根目录，负责依赖装配。
 │   ├── __init__.py                                    包标记。
-│   ├── container.py                                   唯一组合根；装配 Redis store、AgentProvider、服务层、Plan CRUD 工具、ListResumableSubagentsTool 与运行时依赖。
+│   ├── container.py                                   唯一组合根；按模式装配 Redis（单点/Sentinel）、Store、StoreTransaction、RunCancelBus、AgentProvider、服务层、工具与运行时依赖。
 │   └── factory.py                                     公开无参启动入口，支持 `uvicorn app.bootstrap.factory:bootstrap_app --factory`。
 ├── core/                                              核心领域与运行时目录。
 │   ├── __init__.py                                    核心层包标记。
@@ -70,6 +70,11 @@ app/
 │   ├── loop/                                          Agent Loop 多轮循环编排目录。
 │   │   ├── __init__.py                                导出 `AgentLoop`。
 │   │   └── agent_loop.py                              Agent Loop 实现；多轮 LLM 调用与工具执行编排，含取消检测点。
+│   ├── ports/                                         核心存储端口目录（企业可替换存储后端的抽象接入口）。
+│   │   ├── __init__.py                                统一导出全部 Store Protocol、事务端口与取消广播端口。
+│   │   ├── stores.py                                  存储端口定义：SessionStore、RunStore、TaskStore、LockStore、ToolResultStore 及 DTO（ContextSummaryState 等）。
+│   │   ├── transactions.py                            复合写入端口：StoreTransaction 及请求 DTO（RunCreateWrite 等 4 类复合写入）。
+│   │   └── cancellation.py                            取消广播端口：RunCancelBus（跨进程 run 取消的发布与监听抽象）。
 │   └── runtime/                                       运行时核心目录。
 │       ├── __init__.py                                导出 `ContextBuilder` 等。
 │       ├── agent_runtime.py                           单次 Run 执行内核；`stream_once()` 负责单次 LLM 调用。
@@ -112,12 +117,14 @@ app/
 │   │   ├── query_tool_result_tool.py                  大工具结果分页查询工具。
 │   │   └── run_python_script_tool.py                  项目内 Python 脚本执行工具。
 │   └── store/                                         Redis 持久化适配目录。
-│       ├── __init__.py                                统一导出全部 Store。
+│       ├── __init__.py                                统一导出全部 Store 及适配器。
 │       ├── redis_lock_store.py                        会话分布式锁实现（SET NX EX + 心跳续期）。
 │       ├── redis_run_store.py                         Run 持久化。
 │       ├── redis_session_store.py                     会话元数据、主/child 上下文消息、session 索引持久化（Hash 结构），含 SessionChildSummary 可恢复子代理摘要。
 │       ├── redis_task_store.py                        Task 持久化。
-│       └── redis_tool_result_store.py                 大工具结果持久化。
+│       ├── redis_tool_result_store.py                 大工具结果持久化。
+│       ├── redis_store_transaction.py                 复合写入事务适配器（封装 Redis pipeline，实现 StoreTransaction 端口）。
+│       └── redis_run_cancel_bus.py                    运行取消广播适配器（封装 Redis pubsub，实现 RunCancelBus 端口）。
 ├── interfaces/                                        接口适配层目录。
 │   ├── __init__.py                                    包标记。
 │   └── http/                                          HTTP 接入层目录。
@@ -170,6 +177,8 @@ tests/
 │       └── test_mcp_real_server_smoke.py              MCP 真实服务冒烟测试。
 ├── curl_test/                                          curl 端到端测试。
 │   ├── test_cancel.sh                                 取消功能端到端测试。
+│   ├── smoke_test_store_protocol.sh                    Store Protocol 重构全端点冒烟测试。
+│   ├── test_cancel_run.sh                              取消 Run 专用冒烟测试。
 │   ├── test_worker_chat.sh                            Worker 子代理对话 e2e 测试。
 │   ├── test_plan_isolation.sh                         Plan 隔离命名空间 e2e 测试。
 │   └── test_resumable_subagents.sh                    可恢复子代理 e2e 测试。
@@ -186,6 +195,8 @@ tests/
     │   │   ├── test_event.py                          事件序列化测试。
     │   │   ├── test_models.py                         模型测试。
     │   │   └── test_tool.py                           ToolRegistry 测试。
+    │   ├── ports/
+    │   │   └── test_store_ports.py                    Store 端口与 DTO 冒烟测试。
     │   └── runtime/
     │       ├── test_agent_runtime.py                  AgentRuntime 测试。
     │       ├── test_context_builder.py                上下文构建测试。
@@ -216,7 +227,9 @@ tests/
     │       ├── test_redis_run_store.py                Run 存储测试。
     │       ├── test_redis_session_store.py            会话存储测试。
     │       ├── test_redis_task_store.py               Task 存储测试。
-    │       └── test_redis_tool_result_store.py        大结果存储测试。
+    │       ├── test_redis_tool_result_store.py        大结果存储测试。
+    │       ├── test_redis_store_transaction.py        复合写入事务适配器测试。
+    │       └── test_redis_run_cancel_bus.py           取消广播适配器测试。
     ├── interfaces/http/routes/
     │   └── test_chat_route.py                         聊天路由测试。
     └── services/
@@ -239,7 +252,7 @@ POST /sessions
 -> app/interfaces/http/dependencies.py
 -> SessionService.create_session()
 -> MasterAgentProvider.get_default()
--> RedisSessionStore.create_session()
+-> SessionStore.create_session()
 ```
 
 产物是一个绑定主智能体的 `Session` 元数据记录。
@@ -254,8 +267,8 @@ POST /chat
 -> app/interfaces/http/dependencies.py
 -> ChatService.stream_chat()
    -> ChatRunLockScope.acquire()                    # 会话锁 + 心跳续期
-   -> RedisRunStore.create_run()                    # Run 建档
-   -> RedisSessionStore.append_main_message(user)
+   -> SessionStore.append_main_message(user)
+   -> StoreTransaction.create_run_and_index_session()
    -> ContextBuilder.build_llm_messages()            # 构建上下文
    -> AgentLoop.run()                               # 多轮循环编排
      -> AgentRuntime.stream_once()                  # 单次 LLM 调用
@@ -279,12 +292,12 @@ POST /chat
 - POST /runs/{run_id}/cancel
   -> RunControlService.cancel_run()
   -> ChatService.cancel_run()
-  -> cancel_event.set() 或 Redis PUBLISH run_cancel:{run_id}
+  -> cancel_event.set() 或 RunCancelBus.publish_cancel(run_id)
 - SSE 断链
   -> _disconnect_monitor() 检测 http.disconnect
   -> cancel_event.set()
-- Redis run_cancel 广播（跨进程）
-  -> _listen_cancel_messages() 收到 pmessage
+- RunCancelBus 广播（跨进程）
+  -> _listen_cancel_messages() 收到取消 run_id
   -> cancel_event.set()
 ```
 
@@ -294,12 +307,12 @@ POST /chat
 GET /sessions/{session_id}
 -> app/interfaces/http/routes/sessions.py
 -> SessionService.get_session_view()
--> RedisSessionStore + RedisLockStore
+-> SessionStore + LockStore
 
 GET /runs/{run_id}
 -> app/interfaces/http/routes/runs.py
 -> RunControlService.get_run()
--> RedisRunStore.get_run()
+-> RunStore.get_run()
 
 POST /runs/{run_id}/cancel
 -> app/interfaces/http/routes/runs.py
@@ -364,8 +377,9 @@ app/config.py(.env) + app/infra/agents/master_prompt.md
 
 持久化链:
 SessionService / ChatService / RunControlService
--> RedisSessionStore / RedisRunStore / RedisLockStore / RedisTaskStore / RedisToolResultStore
--> Redis
+-> SessionStore / RunStore / LockStore / TaskStore / ToolResultStore
+-> StoreTransaction / RunCancelBus
+-> Redis 默认适配器
 
 启动链:
 start.py / uvicorn --factory
@@ -405,6 +419,51 @@ cp .env.example .env
 ```
 
 服务默认运行在 `http://localhost:8000`，访问 `/docs` 可查看 Swagger API 文档。
+
+### Redis 配置模式
+
+项目支持两种 Redis 连接模式，通过 `.env` 中的 `REDIS_MODE` 配置项切换。
+
+#### 单点模式（默认）
+
+适用于开发环境或单 Redis 实例部署。配置项：
+
+```bash
+REDIS_MODE=single
+REDIS_URL=redis://:your_password@127.0.0.1:6379/0
+REDIS_KEY_PREFIX=agent
+```
+
+其中 `REDIS_URL` 格式为 `redis://[:密码@]主机:端口/库号`。本地无密码时可省略 `:your_password@`。
+
+#### Sentinel 模式（生产推荐）
+
+适用于 Redis 高可用集群部署，应用通过 Sentinel 自动发现当前 master 节点，支持故障切换。配置项：
+
+```bash
+REDIS_MODE=sentinel
+REDIS_SENTINEL_NODES=127.0.0.1:26379,127.0.0.2:26379,127.0.0.3:26379
+REDIS_SENTINEL_MASTER_NAME=mymaster
+REDIS_KEY_PREFIX=agent
+REDIS_DB=0
+REDIS_USERNAME=
+REDIS_PASSWORD=your_password
+```
+
+| 配置项 | 必填 | 说明 |
+|--------|------|------|
+| `REDIS_MODE` | 是 | 设为 `sentinel` |
+| `REDIS_SENTINEL_NODES` | 是 | Sentinel 节点列表，逗号分隔 `host:port`，支持 JSON 数组格式 |
+| `REDIS_SENTINEL_MASTER_NAME` | 是 | Sentinel 监控的 master service name |
+| `REDIS_DB` | 否 | master 逻辑库编号，默认 `0` |
+| `REDIS_USERNAME` | 否 | Redis 认证用户名（Sentinel 与 master 共用） |
+| `REDIS_PASSWORD` | 否 | Redis 认证密码（Sentinel 与 master 共用） |
+
+**连接说明：**
+
+- 应用启动时会创建两个独立的 Redis 连接客户端：主连接（连接池 50，服务业务读写）和 pubsub 连接（连接池 2，专用于跨进程取消广播监听）。
+- 两个客户端在 Sentinel 模式下均通过 `sentinel.master_for()` 发现当前 master，上层 Store 和 Service 对连接模式无感知。
+- Sentinel 与 master 共用同一套 `REDIS_USERNAME` / `REDIS_PASSWORD` 认证凭据。
 
 ## 使用指南
 
@@ -468,4 +527,26 @@ MCP 用于接入外部工具服务（数据库、文件系统、Web 等），Ski
 修改主智能体的行为风格、约束规则等。
 修改工具描述以及工具参数描述规则。
 
-> 提示：编辑 `app/infra/agents/master_prompt.md`，调整主智能体的 system prompt。```
+> 提示：编辑 `app/infra/agents/master_prompt.md`，调整主智能体的 system prompt。
+
+### 第六步：替换 Store 后端（可选）
+
+默认实现使用 Redis。企业如需替换为 PostgreSQL、MongoDB 或自研存储，不需要修改服务层主链路，应在组合根中注入自定义端口实现。
+
+需要实现的核心端口位于 `app/core/ports/`：
+
+- `SessionStore`：会话元数据、主上下文、child 上下文、child 摘要索引。
+- `RunStore`：Run 创建、查询、终态更新与删除。
+- `TaskStore`：Plan/Task CRUD 存储。
+- `LockStore`：session 单活跃 run 锁。
+- `ToolResultStore`：大工具结果持久化与查询。
+- `StoreTransaction`：主 run 创建、主 run 终态、child 首条输入与摘要、child 终态等复合写入。
+- `RunCancelBus`：跨进程 run 取消广播与监听。
+
+项目只提供 Redis 默认适配器，不内置 PostgreSQL/MongoDB 实现。替换方式是在 `app/bootstrap/container.py` 中把默认 Redis 实例替换为企业自己的实现。
+
+约束说明：
+
+- 不要求替代后端模拟 Redis pipeline，复合写入由 `StoreTransaction` 表达业务语义。
+- 不要求替代后端模拟 Redis pubsub，取消广播由 `RunCancelBus` 表达业务语义。
+- 替代实现应自行说明事务一致性、锁租约和取消广播的可靠性边界。```

@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any, Awaitable
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
-    from app.infra.store.redis_lock_store import RedisLockStore
+    from app.core.ports.stores import LockStore
 
 
 class ChatRunLockNotAcquiredError(Exception):
@@ -40,7 +40,7 @@ class ChatRunLockScope:
 
     def __init__(
         self,
-        lock_store: RedisLockStore,
+        lock_store: "LockStore",
         session_id: str,
         run_id: str,
         ttl_seconds: int,

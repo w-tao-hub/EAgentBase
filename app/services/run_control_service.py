@@ -9,7 +9,7 @@ from app.core.models.error import AppError, ErrorCode
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
-    from app.infra.store.redis_run_store import RedisRunStore
+    from app.core.ports.stores import RunStore
 
 
 class RunControlService:
@@ -22,7 +22,7 @@ class RunControlService:
 
     def __init__(
         self,
-        run_store: RedisRunStore,
+        run_store: "RunStore",
         chat_service: object,
     ) -> None:
         """初始化 RunControlService。

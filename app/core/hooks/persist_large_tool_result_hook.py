@@ -6,24 +6,15 @@
 
 from __future__ import annotations
 
-from typing import Protocol
-
 from app.core.hooks.base import ToolHook
 from app.core.hooks.types import ToolResponse
 from app.core.models.tool import ToolResult
+from app.core.ports.stores import ToolResultPersistenceStore
 
 
 MAX_TOOL_RESULT_CHARACTERS = 15000
 TOOL_RESULT_PREVIEW_CHARACTERS = 2000
 QUERY_TOOL_RESULT_NAME = "query_tool_result"
-
-
-class ToolResultPersistenceStore(Protocol):
-    """大工具结果存储最小协议。"""
-
-    async def persist_result(self, session_id: str, tool_name: str, content: str) -> str:
-        """持久化完整工具结果并返回可查询的 key。"""
-        ...
 
 
 class PersistLargeToolResultHook(ToolHook):

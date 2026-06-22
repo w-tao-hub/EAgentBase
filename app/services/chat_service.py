@@ -29,15 +29,16 @@ from app.services.chat_run_lock import (
     ChatRunLockNotAcquiredError,
     ChatRunLockScope,
 )
+from app.core.ports.transactions import MainRunTerminalWrite, RunCreateWrite
 
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from app.core.models.agent import Agent, AgentExecutionProfile
     from app.core.runtime.context_builder import ContextTrimPolicy
-    from app.infra.store.redis_session_store import RedisSessionStore
-    from app.infra.store.redis_run_store import RedisRunStore
-    from app.infra.store.redis_lock_store import RedisLockStore
+    from app.core.ports.cancellation import RunCancelBus
+    from app.core.ports.stores import LockStore, RunStore, SessionStore
+    from app.core.ports.transactions import StoreTransaction
     from app.services.agent_provider import AgentProvider
     from app.core.loop.agent_loop import AgentLoop
     from app.config import Settings
@@ -75,32 +76,29 @@ class ChatService:
 
     def __init__(
         self,
-        session_store: RedisSessionStore,
-        run_store: RedisRunStore,
-        lock_store: RedisLockStore,
-        agent_provider: AgentProvider,
-        agent_loop: AgentLoop,
-        settings: Settings,
-        redis: object,
-        pubsub_redis: object | None = None,
-        context_trim_policy: ContextTrimPolicy | None = None,
-        event_processor: ChatEventProcessor | None = None,
+        session_store: "SessionStore",
+        run_store: "RunStore",
+        lock_store: "LockStore",
+        store_transaction: "StoreTransaction",
+        run_cancel_bus: "RunCancelBus",
+        agent_provider: "AgentProvider",
+        agent_loop: "AgentLoop",
+        settings: "Settings",
+        context_trim_policy: "ContextTrimPolicy | None" = None,
+        event_processor: "ChatEventProcessor | None" = None,
     ) -> None:
         self._session_store = session_store
         self._run_store = run_store
         self._lock_store = lock_store
+        self._store_transaction = store_transaction
+        self._run_cancel_bus = run_cancel_bus
         self._agent_provider = agent_provider
         self._agent_loop = agent_loop
         self._settings = settings
-        self._redis = redis
-        self._pubsub_redis = pubsub_redis or redis
         self._context_trim_policy = context_trim_policy or NoTrimPolicy()
         self._event_processor = event_processor or ChatEventProcessor(session_store)
         self._active_cancel_events: dict[str, asyncio.Event] = {}
-        self._cancel_channel_pattern = "run_cancel:*"
-        self._cancel_channel_prefix = "run_cancel:"
         self._cancel_listener_task: asyncio.Task[None] | None = None
-        self._cancel_pubsub: object | None = None
         self._cancel_listener_lock = asyncio.Lock()
         self._cancel_listener_closed = False
 
@@ -121,24 +119,11 @@ class ChatService:
             if self._cancel_listener_task is not None and not self._cancel_listener_task.done():
                 return True
 
-            stale_pubsub = self._cancel_pubsub
-            self._cancel_pubsub = None
-            if stale_pubsub is not None:
-                await self._close_cancel_pubsub(stale_pubsub)
-
-            try:
-                pubsub = self._pubsub_redis.pubsub()
-                await pubsub.psubscribe(self._cancel_channel_pattern)
-            except Exception as error:  # noqa: BLE001
-                logger.error("启动全局取消监听器失败: error=%s", error, exc_info=True)
-                return False
-
-            self._cancel_pubsub = pubsub
             self._cancel_listener_task = asyncio.create_task(
-                self._listen_cancel_messages(pubsub),
+                self._listen_cancel_messages(),
                 name="chat-service-run-cancel-listener",
             )
-            logger.info("全局取消监听器已启动: pattern=%s", self._cancel_channel_pattern)
+            logger.info("全局取消监听器已启动")
             return True
 
     async def aclose(self) -> None:
@@ -146,9 +131,7 @@ class ChatService:
         async with self._cancel_listener_lock:
             self._cancel_listener_closed = True
             listener_task = self._cancel_listener_task
-            pubsub = self._cancel_pubsub
             self._cancel_listener_task = None
-            self._cancel_pubsub = None
 
         if listener_task is not None:
             listener_task.cancel()
@@ -157,20 +140,7 @@ class ChatService:
             except asyncio.CancelledError:
                 pass
 
-        if pubsub is not None:
-            await self._close_cancel_pubsub(pubsub)
-
-    async def _close_cancel_pubsub(self, pubsub: object) -> None:
-        """关闭共享取消监听 pubsub。"""
-        try:
-            await pubsub.punsubscribe(self._cancel_channel_pattern)
-        except Exception as error:  # noqa: BLE001
-            logger.warning("取消监听器退订失败: error=%s", error, exc_info=True)
-
-        try:
-            await pubsub.aclose()
-        except Exception as error:  # noqa: BLE001
-            logger.warning("取消监听器关闭 pubsub 失败: error=%s", error, exc_info=True)
+        await self._run_cancel_bus.aclose()
 
     async def stream_chat(
         self,
@@ -218,7 +188,7 @@ class ChatService:
                     user_message_model = self._build_user_message(user_message)
                     profile = self._agent_provider.get_default_profile()
                     agent = profile.agent
-                    history, history_indices = await self._session_store.list_active_main_messages_with_indices(session_id)
+                    history, history_indices = await self._session_store.list_main_active_messages_with_indices(session_id)
                     context_build_result = await ContextBuilder.build_llm_messages_with_repair_meta(
                         agent=agent,
                         history=history,
@@ -247,19 +217,13 @@ class ChatService:
                         agent=agent,
                         metadata=metadata,
                     )
-                    pipeline = self._redis.pipeline()
-                    self._run_store.queue_create_run(
-                        pipeline,
-                        run,
-                        ttl_seconds=self._settings.run_ttl_seconds,
+                    await self._store_transaction.create_run_and_index_session(
+                        RunCreateWrite(
+                            session_id=session_id,
+                            run=run,
+                            run_ttl_seconds=self._settings.run_ttl_seconds,
+                        )
                     )
-                    self._session_store.queue_add_session_run(
-                        pipeline,
-                        session_id=session_id,
-                        run_id=run_id,
-                        created_at_ts=run.created_at.timestamp(),
-                    )
-                    await pipeline.execute()
                     run_created = True
 
                     # Step 7: 构造执行上下文
@@ -505,21 +469,16 @@ class ChatService:
                     reasoning_content=terminal_event.reasoning_content,
                     timestamp=finished_at,
                 )
-                pipeline = self._redis.pipeline()
-                self._run_store.queue_update_run_fields(
-                    pipeline=pipeline,
-                    run_id=run_id,
-                    status=RunStatus.COMPLETED,
-                    finished_at=finished_at,
-                    output=final_output,
+                await self._store_transaction.persist_main_run_terminal(
+                    MainRunTerminalWrite(
+                        session_id=session_id,
+                        run_id=run_id,
+                        status=RunStatus.COMPLETED,
+                        finished_at=finished_at,
+                        output=final_output,
+                        terminal_message=assistant_message,
+                    )
                 )
-                self._session_store.queue_append_message(
-                    pipeline=pipeline,
-                    session_id=session_id,
-                    message=assistant_message,
-                    source_run_id=run_id,
-                )
-                await pipeline.execute()
                 return
 
             await self._run_store.update_run_fields(
@@ -537,22 +496,17 @@ class ChatService:
                 timestamp=finished_at,
                 is_meta=True,
             )
-            pipeline = self._redis.pipeline()
-            self._run_store.queue_update_run_fields(
-                pipeline=pipeline,
-                run_id=run_id,
-                status=RunStatus.CANCELLED,
-                finished_at=finished_at,
-                error_code=terminal_event.error_code,
-                error_message=terminal_event.reason,
+            await self._store_transaction.persist_main_run_terminal(
+                MainRunTerminalWrite(
+                    session_id=session_id,
+                    run_id=run_id,
+                    status=RunStatus.CANCELLED,
+                    finished_at=finished_at,
+                    error_code=terminal_event.error_code,
+                    error_message=terminal_event.reason,
+                    terminal_message=cancel_hint_message,
+                )
             )
-            self._session_store.queue_append_message(
-                pipeline=pipeline,
-                session_id=session_id,
-                message=cancel_hint_message,
-                source_run_id=run_id,
-            )
-            await pipeline.execute()
             return
 
         await self._run_store.update_run_fields(
@@ -579,23 +533,14 @@ class ChatService:
             run_id,
             len(self._active_cancel_events),
         )
-        task = asyncio.create_task(self._redis.publish(f"run_cancel:{run_id}", "cancel"))
+        task = asyncio.create_task(self._run_cancel_bus.publish_cancel(run_id))
         task.add_done_callback(lambda t: t.exception() if t.done() else None)
         return True
 
-    async def _listen_cancel_messages(self, pubsub: object) -> None:
-        """监听全局模式订阅消息，并分发到本地活跃 run 的取消事件。"""
+    async def _listen_cancel_messages(self) -> None:
+        """监听全局取消广播，并分发到本地活跃 run 的取消事件。"""
         try:
-            async for message in pubsub.listen():
-                if message.get("type") != "pmessage":
-                    continue
-                if message.get("data") != "cancel":
-                    continue
-
-                run_id = self._extract_run_id_from_cancel_channel(message.get("channel"))
-                if run_id is None:
-                    continue
-
+            async for run_id in self._run_cancel_bus.listen_cancelled_run_ids():
                 cancel_event = self._active_cancel_events.get(run_id)
                 if cancel_event is not None:
                     logger.info(
@@ -608,15 +553,3 @@ class ChatService:
             raise
         except Exception as error:  # noqa: BLE001
             logger.error("全局取消监听器异常退出: error=%s", error, exc_info=True)
-
-    def _extract_run_id_from_cancel_channel(self, channel: object) -> str | None:
-        """从 run_cancel 频道名中解析 run_id。"""
-        if isinstance(channel, bytes):
-            channel = channel.decode()
-        if not isinstance(channel, str):
-            return None
-        if not channel.startswith(self._cancel_channel_prefix):
-            return None
-
-        run_id = channel.removeprefix(self._cancel_channel_prefix)
-        return run_id or None

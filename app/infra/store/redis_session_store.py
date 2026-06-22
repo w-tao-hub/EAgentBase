@@ -14,31 +14,13 @@ from typing import TYPE_CHECKING, Any
 
 from app.core.models.session import Session
 from app.core.models.stored_message import StoredMessage
+from app.core.ports.stores import ContextSummaryState, SessionChildSummary
 from app.infra.logging import get_logger
 
 logger = get_logger(__name__)
 
 if TYPE_CHECKING:
     from redis.asyncio import Redis
-
-
-@dataclass(slots=True)
-class ContextSummaryState:
-    """会话最近一次上下文摘要的边界状态。"""
-
-    summary_message_id: str
-    active_start_message_id: str | None
-    summary_offset: int | None = None
-    active_start_offset: int | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class SessionChildSummary:
-    """表示当前 session 下一个可恢复子代理的最新摘要。"""
-
-    resume_id: str
-    subagent_type: str
-    description: str
 
 
 @dataclass(slots=True, frozen=True)

@@ -32,7 +32,59 @@ from app.core.models.tool import ToolRegistry
 from app.core.loop.agent_loop import AgentLoop
 from app.config import Settings
 from app.core.runtime.context_builder import ContextCompressionError, ContextTrimPolicy
+from app.core.ports.transactions import MainRunTerminalWrite, RunCreateWrite
+from app.core.ports.cancellation import RunCancelBus
+from app.core.ports.stores import LockStore, RunStore, SessionStore
+from app.infra.store.redis_store_transaction import RedisStoreTransaction
+from app.infra.store.redis_run_cancel_bus import RedisRunCancelBus
 from tests.fakes import FakeAgentRuntime
+
+
+class RecordingTransaction:
+    """包装 StoreTransaction，记录 persist_main_run_terminal 调用以便断言。"""
+
+    def __init__(self, delegate: StoreTransaction) -> None:
+        """保存委托的事务实现。"""
+        self._delegate = delegate
+        self.main_terminal_writes: list[MainRunTerminalWrite] = []
+
+    async def create_run_and_index_session(self, write: RunCreateWrite) -> None:
+        """委托创建 Run 并索引 session。"""
+        await self._delegate.create_run_and_index_session(write)
+
+    async def persist_main_run_terminal(self, write: MainRunTerminalWrite) -> None:
+        """记录终态写入请求，并委托给真实实现。"""
+        self.main_terminal_writes.append(write)
+        await self._delegate.persist_main_run_terminal(write)
+
+    async def append_child_input_and_summary(self, write) -> None:
+        """委托写入 child 输入和摘要。"""
+        await self._delegate.append_child_input_and_summary(write)
+
+    async def persist_child_run_terminal(self, write) -> None:
+        """委托持久化 child 终态。"""
+        await self._delegate.persist_child_run_terminal(write)
+
+
+class RecordingCancelBus:
+    """记录发布取消请求，监听器为空。"""
+
+    def __init__(self) -> None:
+        """初始化空发布记录列表。"""
+        self.published: list[str] = []
+
+    async def publish_cancel(self, run_id: str) -> None:
+        """记录发布的 run_id。"""
+        self.published.append(run_id)
+
+    async def listen_cancelled_run_ids(self):  # noqa: ANN201
+        """返回空异步生成器。"""
+        if False:
+            yield ""
+
+    async def aclose(self) -> None:
+        """空实现，不执行任何关闭操作。"""
+        return None
 
 
 class FakeAgentProvider(AgentProvider):
@@ -137,14 +189,24 @@ async def chat_service(fake_redis):  # ChatService 夹具
         session_lock_ttl_seconds=30,  # 设置锁 TTL 为 30 秒
     )
 
+    store_transaction = RecordingTransaction(  # 包装事务适配器以便测试断言
+        RedisStoreTransaction(
+            redis=fake_redis,
+            session_store=session_store,
+            run_store=run_store,
+        )
+    )
+    run_cancel_bus = RedisRunCancelBus(fake_redis)  # 创建真实取消广播适配器
+
     service = ChatService(  # 创建服务实例
         session_store=session_store,
         run_store=run_store,
         lock_store=lock_store,
+        store_transaction=store_transaction,  # 注入复合写入事务
+        run_cancel_bus=run_cancel_bus,  # 注入取消广播
         agent_provider=agent_provider,  # 注入带 profile 的 Agent 提供者
         agent_loop=agent_loop,  # 注入 Agent 循环（无状态设计）
         settings=settings,  # 注入应用配置
-        redis=fake_redis,  # 注入 Redis 客户端
         # extra_system_messages 不再由构造注入，运行时从 master profile 读取
     )
     # 保存 fake_runtime 以便测试中检查
@@ -243,37 +305,9 @@ async def test_chat_service_stream_chat_sets_run_ttl(chat_service, session_with_
 
 @pytest.mark.asyncio  # 标记异步测试
 async def test_chat_service_persist_terminal_completed_uses_single_pipeline_execute(
-    chat_service, session_with_history, fake_redis, monkeypatch
+    chat_service, session_with_history, fake_redis
 ):
-    """测试完成态的 Run 更新与 assistant 成稿会合并到一次 pipeline.execute()。"""
-    execute_calls = 0  # 记录 pipeline.execute 调用次数，验证完成态双写只往返一次 Redis
-    original_pipeline = fake_redis.pipeline  # 保存原始 pipeline 工厂，便于继续复用 fakeredis 的真实行为
-
-    class RecordingPipeline:
-        """包装真实 pipeline，额外记录 execute 次数。"""
-
-        def __init__(self, inner) -> None:
-            """保存被包装的真实 pipeline。"""
-            self._inner = inner
-
-        def hset(self, *args, **kwargs):
-            """透传 HSET 命令到真实 pipeline。"""
-            self._inner.hset(*args, **kwargs)
-            return self
-
-        def rpush(self, *args, **kwargs):
-            """透传 RPUSH 命令到真实 pipeline。"""
-            self._inner.rpush(*args, **kwargs)
-            return self
-
-        async def execute(self):
-            """记录 execute 次数后执行真实 pipeline。"""
-            nonlocal execute_calls
-            execute_calls += 1
-            return await self._inner.execute()
-
-    monkeypatch.setattr(fake_redis, "pipeline", lambda: RecordingPipeline(original_pipeline()))
-
+    """测试完成态的 Run 更新与 assistant 成稿会合并到一次事务调用。"""
     run = Run(
         run_id="run-terminal-completed",
         session_id=session_with_history.session_id,
@@ -282,6 +316,8 @@ async def test_chat_service_persist_terminal_completed_uses_single_pipeline_exec
     )
     await chat_service._run_store.create_run(run)
 
+    writes_before = len(chat_service._store_transaction.main_terminal_writes)
+
     await chat_service._persist_terminal_state(
         session_id=session_with_history.session_id,
         run_id=run.run_id,
@@ -289,7 +325,16 @@ async def test_chat_service_persist_terminal_completed_uses_single_pipeline_exec
         final_output="done",
     )
 
-    assert execute_calls == 1  # 完成态应只执行一次 pipeline
+    # 验证 persist_main_run_terminal 被精确调用一次
+    assert len(chat_service._store_transaction.main_terminal_writes) == writes_before + 1
+    write = chat_service._store_transaction.main_terminal_writes[-1]
+    assert write.status == RunStatus.COMPLETED
+    assert write.output == "done"
+    assert write.terminal_message is not None
+    assert write.terminal_message.role == "assistant"
+    assert write.terminal_message.content == "done"
+
+    # 验证数据确实落到了 Redis
     persisted_run = await chat_service._run_store.get_run(run.run_id)
     assert persisted_run is not None
     assert persisted_run.status == RunStatus.COMPLETED
@@ -303,37 +348,9 @@ async def test_chat_service_persist_terminal_completed_uses_single_pipeline_exec
 
 @pytest.mark.asyncio  # 标记异步测试
 async def test_chat_service_persist_terminal_cancelled_uses_single_pipeline_execute(
-    chat_service, session_with_history, fake_redis, monkeypatch
+    chat_service, session_with_history, fake_redis
 ):
-    """测试取消态的 Run 更新与取消提示消息会合并到一次 pipeline.execute()。"""
-    execute_calls = 0  # 记录 pipeline.execute 次数，验证取消态双写同样只往返一次 Redis
-    original_pipeline = fake_redis.pipeline
-
-    class RecordingPipeline:
-        """包装真实 pipeline，额外记录 execute 次数。"""
-
-        def __init__(self, inner) -> None:
-            """保存被包装的真实 pipeline。"""
-            self._inner = inner
-
-        def hset(self, *args, **kwargs):
-            """透传 HSET 命令到真实 pipeline。"""
-            self._inner.hset(*args, **kwargs)
-            return self
-
-        def rpush(self, *args, **kwargs):
-            """透传 RPUSH 命令到真实 pipeline。"""
-            self._inner.rpush(*args, **kwargs)
-            return self
-
-        async def execute(self):
-            """记录 execute 次数后执行真实 pipeline。"""
-            nonlocal execute_calls
-            execute_calls += 1
-            return await self._inner.execute()
-
-    monkeypatch.setattr(fake_redis, "pipeline", lambda: RecordingPipeline(original_pipeline()))
-
+    """测试取消态的 Run 更新与取消提示消息会合并到一次事务调用。"""
     run = Run(
         run_id="run-terminal-cancelled",
         session_id=session_with_history.session_id,
@@ -341,6 +358,8 @@ async def test_chat_service_persist_terminal_cancelled_uses_single_pipeline_exec
         created_at=datetime.now(timezone.utc),
     )
     await chat_service._run_store.create_run(run)
+
+    writes_before = len(chat_service._store_transaction.main_terminal_writes)
 
     await chat_service._persist_terminal_state(
         session_id=session_with_history.session_id,
@@ -353,7 +372,17 @@ async def test_chat_service_persist_terminal_cancelled_uses_single_pipeline_exec
         final_output="",
     )
 
-    assert execute_calls == 1  # 取消态也应只执行一次 pipeline
+    # 验证 persist_main_run_terminal 被精确调用一次
+    assert len(chat_service._store_transaction.main_terminal_writes) == writes_before + 1
+    write = chat_service._store_transaction.main_terminal_writes[-1]
+    assert write.status == RunStatus.CANCELLED
+    assert write.error_code == ErrorCode.RUN_CANCELLED
+    assert write.terminal_message is not None
+    assert write.terminal_message.role == "system"
+    assert write.terminal_message.content == "此次生成已被用户取消。"
+    assert write.terminal_message.is_meta is True
+
+    # 验证数据确实落到了 Redis
     persisted_run = await chat_service._run_store.get_run(run.run_id)
     assert persisted_run is not None
     assert persisted_run.status == RunStatus.CANCELLED
@@ -409,6 +438,9 @@ async def test_chat_service_global_cancel_listener_sets_matching_local_event(cha
     started = await chat_service.start_cancel_listener()  # 显式启动全局监听器，覆盖独立模式订阅路径
     assert started is True  # 监听器应能成功启动
 
+    # 等待监听器任务完成 pubsub 订阅，避免 publish 时还未就绪
+    await asyncio.sleep(0)
+
     cancel_event = asyncio.Event()  # 构造一个本地取消事件，模拟当前 worker 正在执行的 run
     chat_service._active_cancel_events["run-listener"] = cancel_event  # 手动登记到活跃 run 表，便于监听器命中
 
@@ -434,17 +466,11 @@ async def test_chat_service_start_cancel_listener_is_idempotent(chat_service):
 
 
 @pytest.mark.asyncio
-async def test_chat_service_cancel_run_prefers_local_event_over_redis_publish(chat_service, monkeypatch):
-    """测试本地命中活跃 run 时，cancel_run 会直接触发事件而不是广播到 Redis。"""
-    publish_called = False  # 记录 Redis publish 是否被调用，验证本地取消优先级
+async def test_chat_service_cancel_run_prefers_local_event_over_redis_publish(chat_service):
+    """测试本地命中活跃 run 时，cancel_run 不会广播到 run_cancel_bus。"""
+    recording_bus = RecordingCancelBus()  # 创建录制 bus，用于验证是否触发广播
+    chat_service._run_cancel_bus = recording_bus  # 替换为录制版
 
-    async def fake_publish(channel: str, message: str) -> int:
-        """替换 Redis publish，若被调用则更新标记。"""
-        nonlocal publish_called
-        publish_called = True
-        return 1
-
-    monkeypatch.setattr(chat_service._redis, "publish", fake_publish)  # 拦截 Redis 广播，避免测试误依赖真实 publish 行为
     local_event = asyncio.Event()  # 构造本地取消事件，模拟 run 仍在当前 worker 活跃执行
     chat_service._active_cancel_events["run-local"] = local_event  # 手动登记本地活跃 run，覆盖 cancel_run 的快速路径
 
@@ -452,27 +478,21 @@ async def test_chat_service_cancel_run_prefers_local_event_over_redis_publish(ch
         assert chat_service.cancel_run("run-local") is True  # 发起取消请求，应命中本地事件并立即返回成功
         await asyncio.sleep(0)  # 让事件循环切换一次，确保如果错误创建了 publish 任务也能暴露出来
         assert local_event.is_set() is True  # 断言本地取消事件已经被直接触发
-        assert publish_called is False  # 断言本地命中时没有再走 Redis 广播
+        assert recording_bus.published == []  # 断言本地命中时没有再走广播
     finally:
         chat_service._active_cancel_events.pop("run-local", None)  # 清理测试手动登记的 run，避免影响后续测试
 
 
 @pytest.mark.asyncio
-async def test_chat_service_cancel_run_publishes_when_run_is_not_local(chat_service, monkeypatch):
-    """测试本地未命中活跃 run 时，cancel_run 会通过 Redis 广播取消信号。"""
-    published_messages: list[tuple[str, str]] = []
+async def test_chat_service_cancel_run_publishes_when_run_is_not_local(chat_service):
+    """测试本地未命中活跃 run 时，cancel_run 会通过 run_cancel_bus 广播取消信号。"""
+    recording_bus = RecordingCancelBus()  # 创建录制 bus，用于捕获广播的 run_id
+    chat_service._run_cancel_bus = recording_bus  # 替换为录制版
 
-    async def fake_publish(channel: str, message: str) -> int:
-        """替换 Redis publish，记录广播参数。"""
-        published_messages.append((channel, message))
-        return 1
+    assert chat_service.cancel_run("run-remote") is True  # 本地无活跃 run 时，仍应返回"已发出取消信号"
+    await asyncio.sleep(0)  # 等待后台 create_task 调度执行 publish_cancel
 
-    monkeypatch.setattr(chat_service._redis, "publish", fake_publish)  # 拦截 Redis 广播，转为内存记录
-
-    assert chat_service.cancel_run("run-remote") is True  # 本地无活跃 run 时，仍应返回“已发出取消信号”
-    await asyncio.sleep(0)  # 等待后台 create_task 调度执行 fake_publish
-
-    assert published_messages == [("run_cancel:run-remote", "cancel")]  # 断言广播频道与消息体符合当前取消协议
+    assert recording_bus.published == ["run-remote"]  # 断言广播的 run_id 正确
 
 
 @pytest.mark.asyncio  # 标记异步测试
@@ -491,14 +511,20 @@ async def test_chat_service_returns_request_failed_when_session_locked(
         redis_url="redis://localhost:6379",
         session_lock_ttl_seconds=30,  # 设置锁 TTL 为 30 秒
     )
+    session_store = RedisSessionStore(fake_redis, key_prefix="test")
+    run_store = RedisRunStore(fake_redis, key_prefix="test")
+    store_txn = RecordingTransaction(
+        RedisStoreTransaction(redis=fake_redis, session_store=session_store, run_store=run_store)
+    )
     service = ChatService(  # 创建服务实例
-        session_store=RedisSessionStore(fake_redis, key_prefix="test"),
-        run_store=RedisRunStore(fake_redis, key_prefix="test"),
+        session_store=session_store,
+        run_store=run_store,
         lock_store=lock_store,
+        store_transaction=store_txn,
+        run_cancel_bus=RecordingCancelBus(),
         agent_provider=FakeAgentProvider(),
         agent_loop=agent_loop,  # 注入 Agent 循环
         settings=settings,  # 注入应用配置
-        redis=fake_redis,  # 注入 Redis 客户端
     )
 
     # 收集所有事件
@@ -547,14 +573,20 @@ async def test_chat_service_emits_run_failed_and_persists_failed_state(
         redis_url="redis://localhost:6379",
         session_lock_ttl_seconds=30,  # 设置锁 TTL 为 30 秒
     )
+    session_store = RedisSessionStore(fake_redis, key_prefix="test")
+    run_store = RedisRunStore(fake_redis, key_prefix="test")
+    store_txn = RecordingTransaction(
+        RedisStoreTransaction(redis=fake_redis, session_store=session_store, run_store=run_store)
+    )
     service = ChatService(  # 创建服务实例
-        session_store=RedisSessionStore(fake_redis, key_prefix="test"),
-        run_store=RedisRunStore(fake_redis, key_prefix="test"),
+        session_store=session_store,
+        run_store=run_store,
         lock_store=RedisLockStore(fake_redis, key_prefix="test"),
+        store_transaction=store_txn,
+        run_cancel_bus=RecordingCancelBus(),
         agent_provider=FakeAgentProvider(profile=profile),  # 注入带失败事件的 profile
         agent_loop=agent_loop,  # 注入 Agent 循环
         settings=settings,  # 注入应用配置
-        redis=fake_redis,  # 注入 Redis 客户端
     )
 
     # 收集所有事件
@@ -608,18 +640,18 @@ async def test_chat_service_appends_user_message_before_runtime(fake_redis, sess
     # 创建自定义 session_store 来记录调用顺序
     session_store = RedisSessionStore(fake_redis, key_prefix="test")  # 创建会话存储
     original_append = session_store.append_main_message  # 保存新的主会话上下文写入方法
-    original_list_active_messages_with_indices = session_store.list_active_main_messages_with_indices  # 保存新的主会话活动窗口查询方法
+    original_list_active_messages_with_indices = session_store.list_main_active_messages_with_indices  # 保存正式主会话活动窗口查询方法
 
     async def recording_append(session_id, message, source_run_id=None):  # 记录调用的 append
         call_order.append("append_message")  # 记录消息追加
         return await original_append(session_id, message, source_run_id=source_run_id)  # 调用原始方法
 
     async def recording_list_active_messages_with_indices(session_id):  # 记录活动窗口查询调用
-        call_order.append("list_active_messages_with_indices")  # 记录活动窗口查询
+        call_order.append("list_main_active_messages_with_indices")  # 记录正式活动窗口查询
         return await original_list_active_messages_with_indices(session_id)  # 调用原始活动窗口查询方法
 
     session_store.append_main_message = recording_append  # 替换新的主会话上下文写入方法
-    session_store.list_active_main_messages_with_indices = recording_list_active_messages_with_indices  # 替换新的主会话活动窗口查询方法
+    session_store.list_main_active_messages_with_indices = recording_list_active_messages_with_indices  # 替换正式主会话活动窗口查询方法
 
     tool_registry = ToolRegistry()  # 创建工具注册表
     agent_loop = AgentLoop(default_max_turns=10)  # 创建 Agent 循环（无状态设计）
@@ -646,21 +678,26 @@ async def test_chat_service_appends_user_message_before_runtime(fake_redis, sess
         redis_url="redis://localhost:6379",
         session_lock_ttl_seconds=30,  # 设置锁 TTL 为 30 秒
     )
+    run_store = RedisRunStore(fake_redis, key_prefix="test")
+    store_txn = RecordingTransaction(
+        RedisStoreTransaction(redis=fake_redis, session_store=session_store, run_store=run_store)
+    )
     service = ChatService(  # 创建服务实例
         session_store=session_store,
-        run_store=RedisRunStore(fake_redis, key_prefix="test"),
+        run_store=run_store,
         lock_store=RedisLockStore(fake_redis, key_prefix="test"),
+        store_transaction=store_txn,
+        run_cancel_bus=RecordingCancelBus(),
         agent_provider=FakeAgentProvider(profile=profile),  # 注入带 RecordingFakeRuntime 的 profile
         agent_loop=agent_loop,  # 注入 Agent 循环
         settings=settings,  # 注入应用配置
-        redis=fake_redis,  # 注入 Redis 客户端
     )
 
     # 执行
     events = [event async for event in service.stream_chat("session-1", "test message")]  # 流式聊天
 
     # 验证新的调用顺序：先读旧历史，再持久化当前用户消息，最后再调用 Runtime。
-    assert call_order[:3] == ["list_active_messages_with_indices", "append_message", "runtime_stream"]  # 验证上下文准备顺序
+    assert call_order[:3] == ["list_main_active_messages_with_indices", "append_message", "runtime_stream"]  # 验证上下文准备顺序
 
     # 验证消息已持久化
     messages = await session_store.list_messages("session-1")  # 查询消息列表
@@ -734,15 +771,21 @@ async def test_chat_service_passes_injected_context_trim_policy_to_context_build
         redis_url="redis://localhost:6379",
         session_lock_ttl_seconds=30,
     )
+    session_store = RedisSessionStore(fake_redis, key_prefix="test")
+    run_store = RedisRunStore(fake_redis, key_prefix="test")
+    store_txn = RecordingTransaction(
+        RedisStoreTransaction(redis=fake_redis, session_store=session_store, run_store=run_store)
+    )
     service = ChatService(
-        session_store=RedisSessionStore(fake_redis, key_prefix="test"),
-        run_store=RedisRunStore(fake_redis, key_prefix="test"),
+        session_store=session_store,
+        run_store=run_store,
         lock_store=RedisLockStore(fake_redis, key_prefix="test"),
+        store_transaction=store_txn,
+        run_cancel_bus=RecordingCancelBus(),
         agent_provider=FakeAgentProvider(profile=profile),  # 注入带自定义事件的 profile
         agent_loop=agent_loop,  # 注入 Agent 循环
         settings=settings,
         context_trim_policy=policy,
-        redis=fake_redis,  # 注入 Redis 客户端
     )
 
     events = [event async for event in service.stream_chat("session-1", "hi")]  # 流式聊天
@@ -778,14 +821,20 @@ async def test_chat_service_releases_lock_when_stream_is_closed_early(fake_redis
         redis_url="redis://localhost:6379",
         session_lock_ttl_seconds=30,
     )
+    session_store = RedisSessionStore(fake_redis, key_prefix="test")
+    run_store = RedisRunStore(fake_redis, key_prefix="test")
+    store_txn = RecordingTransaction(
+        RedisStoreTransaction(redis=fake_redis, session_store=session_store, run_store=run_store)
+    )
     service = ChatService(
-        session_store=RedisSessionStore(fake_redis, key_prefix="test"),
-        run_store=RedisRunStore(fake_redis, key_prefix="test"),
+        session_store=session_store,
+        run_store=run_store,
         lock_store=lock_store,
+        store_transaction=store_txn,
+        run_cancel_bus=RecordingCancelBus(),
         agent_provider=FakeAgentProvider(),
         agent_loop=BlockingAgentLoop(),
         settings=settings,
-        redis=fake_redis,  # 注入 Redis 客户端
     )
 
     stream = service.stream_chat("session-1", "hi")  # 获取异步事件流，但先不完整消费
@@ -828,14 +877,20 @@ async def test_chat_service_fails_run_when_lock_heartbeat_is_lost(fake_redis, se
         redis_url="redis://localhost:6379",
         session_lock_ttl_seconds=2,
     )
+    session_store = RedisSessionStore(fake_redis, key_prefix="test")
+    run_store = RedisRunStore(fake_redis, key_prefix="test")
+    store_txn = RecordingTransaction(
+        RedisStoreTransaction(redis=fake_redis, session_store=session_store, run_store=run_store)
+    )
     service = ChatService(
-        session_store=RedisSessionStore(fake_redis, key_prefix="test"),
-        run_store=RedisRunStore(fake_redis, key_prefix="test"),
+        session_store=session_store,
+        run_store=run_store,
         lock_store=lock_store,
+        store_transaction=store_txn,
+        run_cancel_bus=RecordingCancelBus(),
         agent_provider=FakeAgentProvider(),
         agent_loop=BlockingAgentLoop(),
         settings=settings,
-        redis=fake_redis,  # 注入 Redis 客户端
     )
 
     events = [event async for event in service.stream_chat("session-1", "hi")]  # 消费完整事件流
@@ -904,17 +959,22 @@ async def test_chat_service_marks_session_history_dirty_when_context_builder_det
         tool_hook_pipeline=ToolHookPipeline(),
         max_turns=10,
     )
+    run_store = RedisRunStore(fake_redis, key_prefix="test")
+    store_txn = RecordingTransaction(
+        RedisStoreTransaction(redis=fake_redis, session_store=session_store, run_store=run_store)
+    )
     service = ChatService(
         session_store=session_store,
-        run_store=RedisRunStore(fake_redis, key_prefix="test"),
+        run_store=run_store,
         lock_store=RedisLockStore(fake_redis, key_prefix="test"),
+        store_transaction=store_txn,
+        run_cancel_bus=RecordingCancelBus(),
         agent_provider=FakeAgentProvider(profile=profile),  # 注入带自定义事件的 profile
         agent_loop=agent_loop,
         settings=Settings(
             redis_url="redis://localhost:6379",
             session_lock_ttl_seconds=30,
         ),
-        redis=fake_redis,  # 注入 Redis 客户端
     )
 
     events = [event async for event in service.stream_chat("session-1", "继续")]  # 流式聊天
@@ -971,10 +1031,17 @@ async def test_chat_service_returns_context_compression_failed_when_trim_policy_
             raise ContextCompressionError("上下文压缩失败")
 
     fake_runtime = FakeAgentRuntime(events=[])
+    session_store = RedisSessionStore(fake_redis, key_prefix="test")
+    run_store = RedisRunStore(fake_redis, key_prefix="test")
+    store_txn = RecordingTransaction(
+        RedisStoreTransaction(redis=fake_redis, session_store=session_store, run_store=run_store)
+    )
     service = ChatService(
-        session_store=RedisSessionStore(fake_redis, key_prefix="test"),
-        run_store=RedisRunStore(fake_redis, key_prefix="test"),
+        session_store=session_store,
+        run_store=run_store,
         lock_store=RedisLockStore(fake_redis, key_prefix="test"),
+        store_transaction=store_txn,
+        run_cancel_bus=RecordingCancelBus(),
         agent_provider=FakeAgentProvider(),
         agent_loop=AgentLoop(default_max_turns=10),  # 创建 Agent 循环（无状态设计）
         settings=Settings(
@@ -982,7 +1049,6 @@ async def test_chat_service_returns_context_compression_failed_when_trim_policy_
             session_lock_ttl_seconds=30,
         ),
         context_trim_policy=FailingCompressionPolicy(),
-        redis=fake_redis,  # 注入 Redis 客户端
     )
 
     events = [event async for event in service.stream_chat(session_with_history.session_id, "hi")]
@@ -1045,17 +1111,22 @@ async def test_chat_service_flushes_background_tool_write_before_terminal_and_lo
         return await original_release(session_id, run_id)
 
     lock_store.release = recording_release
+    run_store = RedisRunStore(fake_redis, key_prefix="test")
+    store_txn = RecordingTransaction(
+        RedisStoreTransaction(redis=fake_redis, session_store=session_store, run_store=run_store)
+    )
     service = ChatService(
         session_store=session_store,
-        run_store=RedisRunStore(fake_redis, key_prefix="test"),
+        run_store=run_store,
         lock_store=lock_store,
+        store_transaction=store_txn,
+        run_cancel_bus=RecordingCancelBus(),
         agent_provider=FakeAgentProvider(),
         agent_loop=ToolThenCompleteAgentLoop(),
         settings=Settings(
             redis_url="redis://localhost:6379",
             session_lock_ttl_seconds=30,
         ),
-        redis=fake_redis,
     )
 
     try:
@@ -1121,17 +1192,22 @@ async def test_chat_service_converts_background_write_failure_to_run_failed(
         await original_append(session_id, message, source_run_id=source_run_id)
 
     session_store.append_main_message = failing_append
+    run_store = RedisRunStore(fake_redis, key_prefix="test")
+    store_txn = RecordingTransaction(
+        RedisStoreTransaction(redis=fake_redis, session_store=session_store, run_store=run_store)
+    )
     service = ChatService(
         session_store=session_store,
-        run_store=RedisRunStore(fake_redis, key_prefix="test"),
+        run_store=run_store,
         lock_store=RedisLockStore(fake_redis, key_prefix="test"),
+        store_transaction=store_txn,
+        run_cancel_bus=RecordingCancelBus(),
         agent_provider=FakeAgentProvider(),
         agent_loop=ToolThenCompleteAgentLoop(),
         settings=Settings(
             redis_url="redis://localhost:6379",
             session_lock_ttl_seconds=30,
         ),
-        redis=fake_redis,
     )
 
     try:

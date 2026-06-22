@@ -24,7 +24,7 @@ from app.core.models.stored_message import StoredMessage
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
-    from app.infra.store.redis_session_store import RedisSessionStore
+    from app.core.ports.stores import SessionStore
 
 
 @dataclass(slots=True)
@@ -45,7 +45,7 @@ class PendingSessionWriteBuffer:
     - 任意一次后台写失败后，会在下一次 `enqueue()` 或 `flush()` 时把异常抛回主流程
     """
 
-    def __init__(self, session_store: RedisSessionStore, run_id: str) -> None:
+    def __init__(self, session_store: "SessionStore", run_id: str) -> None:
         self._session_store = session_store
         self._run_id = run_id
         self._tail_task: asyncio.Task[None] | None = None
@@ -124,7 +124,7 @@ class ChatEventProcessor:
     然后根据处理结果决定是否继续推进主流程即可。
     """
 
-    def __init__(self, session_store: RedisSessionStore, child_runner=None) -> None:
+    def __init__(self, session_store: "SessionStore", child_runner=None) -> None:
         self._session_store = session_store
         self._child_runner = child_runner
 

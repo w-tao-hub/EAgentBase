@@ -8,7 +8,8 @@ import pytest
 
 from app.core.models.session import Session
 from app.core.models.stored_message import StoredMessage
-from app.infra.store.redis_session_store import ContextSummaryState, RedisSessionStore
+from app.core.ports.stores import ContextSummaryState
+from app.infra.store.redis_session_store import RedisSessionStore
 
 
 @pytest.mark.asyncio  # 标记为异步测试

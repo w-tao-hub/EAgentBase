@@ -8,7 +8,7 @@ import pytest
 
 from app.core.models.stored_message import StoredMessage
 from app.core.runtime.context_history_view import ContextHistoryViewBuilder
-from app.infra.store.redis_session_store import ContextSummaryState
+from app.core.ports.stores import ContextSummaryState
 
 
 def _message(role: str, content: str) -> StoredMessage:

@@ -25,7 +25,9 @@ from app.core.models.session import Session
 from app.core.models.tool import ToolRegistry
 from app.core.runtime.agent_runtime import Function, ToolCall, TurnComplete
 from app.infra.store.redis_run_store import RedisRunStore
-from app.infra.store.redis_session_store import RedisSessionStore, SessionChildSummary
+from app.core.ports.stores import SessionChildSummary
+from app.infra.store.redis_session_store import RedisSessionStore
+from app.infra.store.redis_store_transaction import RedisStoreTransaction
 from app.infra.tools.list_resumable_subagents_tool import ListResumableSubagentsTool
 from app.infra.tools.task_tool import TaskTool
 from app.services.chat_event_processor import ChatEventProcessor
@@ -82,7 +84,11 @@ async def test_task_dispatch_writes_child_context_and_master_tool_result(fake_re
     child_runner = ChildAgentRunner(  # 创建子代理执行服务
         session_store=session_store,  # 会话存储
         run_store=run_store,  # 运行存储
-        redis=fake_redis,  # Redis 客户端
+        store_transaction=RedisStoreTransaction(
+            redis=fake_redis,
+            session_store=session_store,
+            run_store=run_store,
+        ),
         agent_loop=agent_loop,  # AgentLoop 编排器
         child_profiles={"Plan": child_profile},  # 注册的子代理 profile 映射
         settings=Settings(redis_url="redis://localhost:6379/0"),  # 应用配置（仅需 redis_url）
@@ -294,7 +300,11 @@ async def test_different_child_contexts_are_isolated(fake_redis):
     runner_a = ChildAgentRunner(  # 子代理 A 的执行服务
         session_store=session_store,  # 会话存储
         run_store=run_store,  # 运行存储
-        redis=fake_redis,  # Redis 客户端
+        store_transaction=RedisStoreTransaction(
+            redis=fake_redis,
+            session_store=session_store,
+            run_store=run_store,
+        ),
         agent_loop=agent_loop,  # AgentLoop 编排器
         child_profiles={"Plan": profile_a},  # 注册子代理 profile
         settings=child_settings,  # 应用配置
@@ -330,7 +340,11 @@ async def test_different_child_contexts_are_isolated(fake_redis):
     runner_b = ChildAgentRunner(  # 子代理 B 的执行服务
         session_store=session_store,  # 会话存储
         run_store=run_store,  # 运行存储
-        redis=fake_redis,  # Redis 客户端
+        store_transaction=RedisStoreTransaction(
+            redis=fake_redis,
+            session_store=session_store,
+            run_store=run_store,
+        ),
         agent_loop=agent_loop,  # AgentLoop 编排器
         child_profiles={"Plan": profile_b},  # 注册子代理 profile
         settings=child_settings,  # 应用配置
@@ -406,7 +420,11 @@ async def test_resumable_subagent_query_returns_latest_description(fake_redis):
     runner = ChildAgentRunner(
         session_store=session_store,
         run_store=run_store,
-        redis=fake_redis,
+        store_transaction=RedisStoreTransaction(
+            redis=fake_redis,
+            session_store=session_store,
+            run_store=run_store,
+        ),
         agent_loop=AgentLoop(),
         child_profiles={"Plan": child_profile},
         settings=Settings(redis_url="redis://localhost:6379/0"),

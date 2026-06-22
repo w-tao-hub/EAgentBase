@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING
 from app.core.models.stored_message import StoredMessage
 
 if TYPE_CHECKING:
-    from app.infra.store.redis_session_store import ContextSummaryState
+    from app.core.ports.stores import ContextSummaryState
 
 
 @dataclass(slots=True)

@@ -11,13 +11,13 @@ from app.core.models.tool import Tool, ToolResult
 
 if TYPE_CHECKING:  # 仅在类型检查时导入，避免运行时不必要耦合。
     from app.core.models.execution_context import ExecutionContext
-    from app.infra.store.redis_tool_result_store import RedisToolResultStore
+    from app.core.ports.stores import ToolResultStore
 
 
 class QueryToolResultTool(Tool):
     """查询当前会话下已持久化大工具结果的只读工具。"""
 
-    def __init__(self, tool_result_store: "RedisToolResultStore") -> None:
+    def __init__(self, tool_result_store: "ToolResultStore") -> None:
         """初始化查询工具。"""
         self._tool_result_store = tool_result_store  # 保存 store 引用，供查询完整结果时使用。
 

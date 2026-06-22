@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING
 from app.core.models.stored_message import StoredMessage
 
 if TYPE_CHECKING:
-    from app.infra.store.redis_session_store import RedisSessionStore
+    from app.core.ports.stores import SessionStore
     from app.core.runtime.context_builder import SummaryPersistenceTarget
 
 
@@ -29,7 +29,7 @@ class SummaryPersistencePlan:
 class SummaryPersistenceCoordinator:
     """根据摘要目标执行持久化。"""
 
-    def __init__(self, session_store: "RedisSessionStore") -> None:
+    def __init__(self, session_store: "SessionStore") -> None:
         """保存会话存储依赖。"""
         self._session_store = session_store
 

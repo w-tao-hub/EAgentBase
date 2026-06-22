@@ -3,17 +3,19 @@
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from app.core.models.execution_context import ExecutionContext
 from app.core.models.tool import Tool, ToolResult
-from app.infra.store.redis_session_store import RedisSessionStore
+
+if TYPE_CHECKING:
+    from app.core.ports.stores import SessionStore
 
 
 class ListResumableSubagentsTool(Tool):
     """读取当前 session 下全部可恢复子代理的最新摘要。"""
 
-    def __init__(self, session_store: RedisSessionStore) -> None:
+    def __init__(self, session_store: "SessionStore") -> None:
         """初始化查询工具。"""
         self._session_store = session_store
 

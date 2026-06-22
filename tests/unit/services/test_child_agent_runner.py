@@ -25,6 +25,7 @@ from app.core.models.tool import Tool, ToolResult, ToolRegistry
 from app.core.models.execution_context import ExecutionContext
 from app.infra.store.redis_run_store import RedisRunStore
 from app.infra.store.redis_session_store import RedisSessionStore
+from app.infra.store.redis_store_transaction import RedisStoreTransaction
 from app.services.child_agent_runner import ChildAgentRunner
 from tests.fakes import FakeAgentRuntime
 
@@ -77,7 +78,11 @@ async def test_child_runner_persists_child_run_and_context(fake_redis) -> None:
     runner = ChildAgentRunner(  # 创建被测试的 ChildAgentRunner
         session_store=session_store,  # 注入会话存储
         run_store=run_store,  # 注入运行存储
-        redis=fake_redis,  # 注入 Redis 客户端
+        store_transaction=RedisStoreTransaction(
+            redis=fake_redis,
+            session_store=session_store,
+            run_store=run_store,
+        ),
         agent_loop=AgentLoop(),  # 注入 AgentLoop
         child_profiles={"Plan": profile},  # 注册 Plan profile
         settings=Settings(redis_url="redis://localhost:6379/0"),  # 最小配置
@@ -145,7 +150,11 @@ async def test_child_runner_rejects_resume_with_different_subagent_type(fake_red
     runner = ChildAgentRunner(  # 创建 ChildAgentRunner，但只注册 "Other" profile
         session_store=session_store,  # 注入会话存储
         run_store=run_store,  # 注入运行存储
-        redis=fake_redis,  # 注入 Redis 客户端
+        store_transaction=RedisStoreTransaction(
+            redis=fake_redis,
+            session_store=session_store,
+            run_store=run_store,
+        ),
         agent_loop=AgentLoop(),  # 注入 AgentLoop
         child_profiles={"Other": _plan_profile(FakeAgentRuntime())},  # 只注册 Other，不含 Plan
         settings=Settings(redis_url="redis://localhost:6379/0"),  # 最小配置
@@ -180,7 +189,11 @@ async def test_child_runner_rejects_resume_to_nonexistent_child(fake_redis) -> N
     runner = ChildAgentRunner(  # 创建 ChildAgentRunner
         session_store=session_store,  # 注入会话存储
         run_store=run_store,  # 注入运行存储
-        redis=fake_redis,  # 注入 Redis 客户端
+        store_transaction=RedisStoreTransaction(
+            redis=fake_redis,
+            session_store=session_store,
+            run_store=run_store,
+        ),
         agent_loop=AgentLoop(),  # 注入 AgentLoop
         child_profiles={"Plan": _plan_profile(FakeAgentRuntime())},  # 注册 Plan profile
         settings=Settings(redis_url="redis://localhost:6379/0"),  # 最小配置
@@ -221,7 +234,11 @@ async def test_child_runner_marks_history_dirty(fake_redis) -> None:
     runner = ChildAgentRunner(  # 创建被测试的 ChildAgentRunner
         session_store=session_store,  # 注入会话存储
         run_store=run_store,  # 注入运行存储
-        redis=fake_redis,  # 注入 Redis 客户端
+        store_transaction=RedisStoreTransaction(
+            redis=fake_redis,
+            session_store=session_store,
+            run_store=run_store,
+        ),
         agent_loop=AgentLoop(),  # 注入 AgentLoop
         child_profiles={"Plan": profile},  # 注册 Plan profile
         settings=Settings(redis_url="redis://localhost:6379/0"),  # 最小配置
@@ -257,7 +274,11 @@ async def test_child_runner_marks_history_dirty_when_context_contains_orphan_too
     runner = ChildAgentRunner(
         session_store=session_store,
         run_store=run_store,
-        redis=fake_redis,
+        store_transaction=RedisStoreTransaction(
+            redis=fake_redis,
+            session_store=session_store,
+            run_store=run_store,
+        ),
         agent_loop=AgentLoop(),
         child_profiles={"Plan": profile},
         settings=Settings(redis_url="redis://localhost:6379/0"),
@@ -325,7 +346,11 @@ async def test_child_runner_handles_run_failed_event(fake_redis) -> None:
     runner = ChildAgentRunner(  # 创建被测试的 ChildAgentRunner
         session_store=session_store,  # 注入会话存储
         run_store=run_store,  # 注入运行存储
-        redis=fake_redis,  # 注入 Redis 客户端
+        store_transaction=RedisStoreTransaction(
+            redis=fake_redis,
+            session_store=session_store,
+            run_store=run_store,
+        ),
         agent_loop=AgentLoop(),  # 注入 AgentLoop
         child_profiles={"Plan": profile},  # 注册 Plan profile
         settings=Settings(redis_url="redis://localhost:6379/0"),  # 最小配置
@@ -355,7 +380,11 @@ async def test_child_runner_handles_run_cancelled_event(fake_redis) -> None:
     runner = ChildAgentRunner(
         session_store=session_store,
         run_store=run_store,
-        redis=fake_redis,
+        store_transaction=RedisStoreTransaction(
+            redis=fake_redis,
+            session_store=session_store,
+            run_store=run_store,
+        ),
         agent_loop=AgentLoop(),
         child_profiles={"Plan": profile},
         settings=Settings(redis_url="redis://localhost:6379/0"),
@@ -393,7 +422,11 @@ async def test_child_runner_accepts_valid_resume_and_appends_same_context(fake_r
     runner = ChildAgentRunner(
         session_store=session_store,
         run_store=run_store,
-        redis=fake_redis,
+        store_transaction=RedisStoreTransaction(
+            redis=fake_redis,
+            session_store=session_store,
+            run_store=run_store,
+        ),
         agent_loop=AgentLoop(),
         child_profiles={"Plan": profile},
         settings=Settings(redis_url="redis://localhost:6379/0"),
@@ -441,7 +474,11 @@ async def test_child_agent_runner_writes_summary_and_updates_description_on_resu
     runner = ChildAgentRunner(
         session_store=session_store,
         run_store=run_store,
-        redis=fake_redis,
+        store_transaction=RedisStoreTransaction(
+            redis=fake_redis,
+            session_store=session_store,
+            run_store=run_store,
+        ),
         agent_loop=AgentLoop(),
         child_profiles={"Plan": profile},
         settings=Settings(redis_url="redis://localhost:6379/0"),
@@ -488,7 +525,7 @@ async def test_build_dynamic_profile_filters_child_filtered_tools():
     runner = ChildAgentRunner(
         session_store=MagicMock(),
         run_store=MagicMock(),
-        redis=MagicMock(),
+        store_transaction=MagicMock(),
         agent_loop=MagicMock(),
         child_profiles={"Plan": profile},
         settings=MagicMock(),
@@ -525,7 +562,11 @@ async def test_child_runner_failed_run_summary_still_written(fake_redis) -> None
     runner = ChildAgentRunner(
         session_store=session_store,
         run_store=run_store,
-        redis=fake_redis,
+        store_transaction=RedisStoreTransaction(
+            redis=fake_redis,
+            session_store=session_store,
+            run_store=run_store,
+        ),
         agent_loop=AgentLoop(),
         child_profiles={"Plan": profile},
         settings=Settings(redis_url="redis://localhost:6379/0"),
@@ -566,7 +607,11 @@ async def test_child_runner_resume_wrong_type_preserves_old_summary(fake_redis) 
     runner = ChildAgentRunner(
         session_store=session_store,
         run_store=run_store,
-        redis=fake_redis,
+        store_transaction=RedisStoreTransaction(
+            redis=fake_redis,
+            session_store=session_store,
+            run_store=run_store,
+        ),
         agent_loop=AgentLoop(),
         child_profiles={"Plan": _plan_profile(runtime), "Worker": _plan_profile(FakeAgentRuntime())},
         settings=Settings(redis_url="redis://localhost:6379/0"),

@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from typing import TYPE_CHECKING
 import uuid
 
 from app.config import Settings
@@ -29,6 +30,15 @@ from app.core.models.execution_context import ExecutionContext
 from app.core.models.run import Run, RunStatus
 from app.core.models.stored_message import StoredMessage
 from app.core.runtime.context_builder import ContextBuilder, NoTrimPolicy, SummaryPersistenceTarget
+from app.core.ports.transactions import (
+    ChildContextStartWrite,
+    ChildRunTerminalWrite,
+    RunCreateWrite,
+)
+
+if TYPE_CHECKING:
+    from app.core.ports.stores import RunStore, SessionStore
+    from app.core.ports.transactions import StoreTransaction
 
 
 @dataclass(frozen=True, slots=True)
@@ -56,9 +66,9 @@ class ChildAgentRunner:
     def __init__(
         self,
         *,
-        session_store,
-        run_store,
-        redis,
+        session_store: "SessionStore",
+        run_store: "RunStore",
+        store_transaction: "StoreTransaction",
         agent_loop: AgentLoop,
         child_profiles: dict[str, AgentExecutionProfile],
         settings: Settings,
@@ -67,7 +77,7 @@ class ChildAgentRunner:
     ) -> None:
         self._session_store = session_store
         self._run_store = run_store
-        self._redis = redis
+        self._store_transaction = store_transaction
         self._agent_loop = agent_loop
         self._child_profiles = child_profiles
         self._settings = settings
@@ -115,19 +125,13 @@ class ChildAgentRunner:
                 updated_at=created_at,
                 metadata=metadata,
             )
-            pipeline = self._redis.pipeline()
-            self._run_store.queue_create_run(
-                pipeline,
-                run,
-                ttl_seconds=self._settings.run_ttl_seconds,
+            await self._store_transaction.create_run_and_index_session(
+                RunCreateWrite(
+                    session_id=session_id,
+                    run=run,
+                    run_ttl_seconds=self._settings.run_ttl_seconds,
+                )
             )
-            self._session_store.queue_add_session_run(
-                pipeline,
-                session_id=session_id,
-                run_id=child_run_id,
-                created_at_ts=created_at.timestamp(),
-            )
-            await pipeline.execute()
 
             try:
                 user_message = StoredMessage.create(
@@ -151,24 +155,17 @@ class ChildAgentRunner:
                 if context_result.history_dirty:
                     await self._session_store.mark_child_history_dirty(session_id, child_id)
 
-                # 将首条 user message 落库与摘要写入合并为一次 pipeline，减少 Redis 往返
-                pipeline = self._redis.pipeline()
-                self._session_store.queue_append_child_message(
-                    pipeline,
-                    session_id=session_id,
-                    child_id=child_id,
-                    message=user_message,
-                    source_run_id=child_run_id,
-                    subagent_type=subagent_type,
+                # 将首条 user message 落库与摘要写入合并为一次事务写入
+                await self._store_transaction.append_child_input_and_summary(
+                    ChildContextStartWrite(
+                        session_id=session_id,
+                        child_id=child_id,
+                        child_run_id=child_run_id,
+                        user_message=user_message,
+                        subagent_type=subagent_type,
+                        description=description,
+                    )
                 )
-                self._session_store.queue_upsert_session_child_summary(
-                    pipeline,
-                    session_id=session_id,
-                    child_id=child_id,
-                    subagent_type=subagent_type,
-                    description=description,
-                )
-                await pipeline.execute()
 
                 output = await self._consume_child_loop(
                     session_id=session_id,
@@ -192,25 +189,25 @@ class ChildAgentRunner:
                 raise
             except asyncio.CancelledError as error:
                 finished_at = datetime.now(timezone.utc)
-                await self._run_store.update_run_fields(
-                    run_id=child_run_id,
-                    status=RunStatus.CANCELLED,
-                    finished_at=finished_at,
-                    error_code=ErrorCode.RUN_CANCELLED,
-                    error_message=str(error) if str(error) else "Run cancelled",
-                )
-                # 追加取消提示消息到 child 上下文，与主会话行为一致
-                await self._session_store.append_child_message(
-                    session_id, child_id,
-                    StoredMessage.create(
-                        role="system",
-                        content="此次生成已被用户取消。",
-                        timestamp=finished_at,
-                        is_meta=True,
+                # 将 child run 终态写入与取消提示消息追加合并为一次事务写入
+                await self._store_transaction.persist_child_run_terminal(
+                    ChildRunTerminalWrite(
+                        session_id=session_id,
+                        child_id=child_id,
+                        child_run_id=child_run_id,
+                        status=RunStatus.CANCELLED,
+                        finished_at=finished_at,
                         subagent_type=subagent_type,
-                    ),
-                    source_run_id=child_run_id,
-                    subagent_type=subagent_type,
+                        error_code=ErrorCode.RUN_CANCELLED,
+                        error_message=str(error) if str(error) else "Run cancelled",
+                        terminal_message=StoredMessage.create(
+                            role="system",
+                            content="此次生成已被用户取消。",
+                            timestamp=finished_at,
+                            is_meta=True,
+                            subagent_type=subagent_type,
+                        ),
+                    )
                 )
                 raise ValueError(f"{ErrorCode.CHILD_AGENT_EXECUTION_FAILED.value}: {str(error) if str(error) else 'Run cancelled'}")
             except Exception as error:

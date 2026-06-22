@@ -22,6 +22,8 @@ from app.infra.store.redis_run_store import RedisRunStore
 from app.infra.store.redis_lock_store import RedisLockStore
 from app.infra.store.redis_task_store import RedisTaskStore
 from app.infra.store.redis_tool_result_store import RedisToolResultStore
+from app.infra.store.redis_run_cancel_bus import RedisRunCancelBus
+from app.infra.store.redis_store_transaction import RedisStoreTransaction
 from app.infra.agents.master_agent_provider import MasterAgentProvider, load_master_agent
 from app.core.runtime.context_builder import NoTrimPolicy, TokenBudgetCompressionPolicy
 from app.core.hooks import (
@@ -71,6 +73,8 @@ class _InfraBundle:
     lock_store: RedisLockStore
     task_store: RedisTaskStore
     tool_result_store: RedisToolResultStore
+    store_transaction: RedisStoreTransaction
+    run_cancel_bus: RedisRunCancelBus
 
 
 @dataclass
@@ -270,14 +274,24 @@ class Container:
         redis = cls._create_redis(settings)
         pubsub_redis = cls._create_pubsub_redis(settings)
         key_prefix = settings.redis_key_prefix
+        session_store = RedisSessionStore(redis, key_prefix)
+        run_store = RedisRunStore(redis, key_prefix)
+        store_transaction = RedisStoreTransaction(
+            redis=redis,
+            session_store=session_store,
+            run_store=run_store,
+        )
+        run_cancel_bus = RedisRunCancelBus(pubsub_redis)
         return _InfraBundle(
             redis=redis,
             pubsub_redis=pubsub_redis,
-            session_store=RedisSessionStore(redis, key_prefix),
-            run_store=RedisRunStore(redis, key_prefix),
+            session_store=session_store,
+            run_store=run_store,
             lock_store=RedisLockStore(redis, key_prefix),
             task_store=RedisTaskStore(redis, key_prefix),
             tool_result_store=RedisToolResultStore(redis, key_prefix),
+            store_transaction=store_transaction,
+            run_cancel_bus=run_cancel_bus,
         )
 
     @classmethod
@@ -390,7 +404,7 @@ class Container:
         child_runner = ChildAgentRunner(
             session_store=infra.session_store,
             run_store=infra.run_store,
-            redis=infra.redis,
+            store_transaction=infra.store_transaction,
             agent_loop=agent_loop,
             child_profiles=child_profiles,
             settings=settings,
@@ -453,11 +467,11 @@ class Container:
             session_store=infra.session_store,
             run_store=infra.run_store,
             lock_store=infra.lock_store,
+            store_transaction=infra.store_transaction,
+            run_cancel_bus=infra.run_cancel_bus,
             agent_provider=profiles.agent_provider,
             agent_loop=profiles.agent_loop,
             settings=settings,
-            redis=infra.redis,
-            pubsub_redis=infra.pubsub_redis,
             context_trim_policy=profiles.context_trim_policy,
             event_processor=chat_event_processor,
         )

@@ -161,7 +161,7 @@ async def test_chat_sse_emits_expected_event_order(chat_client):
     events = await collect_sse_events(
         chat_client,
         "/chat",
-        json={"session_id": session_id, "message": "Hi"},
+        json={"session_id": session_id, "master_agent_name": "default", "message": "Hi"},
     )
 
     assert len(events) > 0
@@ -180,7 +180,7 @@ async def test_chat_sse_with_missing_session_returns_request_failed(chat_client)
     events = await collect_sse_events(
         chat_client,
         "/chat",
-        json={"session_id": "nonexistent-session", "message": "Hi"},
+        json={"session_id": "nonexistent-session", "master_agent_name": "default", "message": "Hi"},
     )
 
     assert len(events) > 0
@@ -191,17 +191,17 @@ async def test_chat_sse_with_missing_session_returns_request_failed(chat_client)
 @pytest.mark.asyncio  # 标记为异步测试
 async def test_chat_validation_error_response_omits_details(chat_client):
     """测试 `/chat` 参数校验失败时不再返回 `details` 字段。"""
-    # 发送一个无效请求，触发请求体字段最小长度校验。
+    # 发送缺少 master_agent_name 的请求，触发必填字段校验。
     response = await chat_client.post(
         "/chat",
-        json={"session_id": "", "message": "1"},
+        json={"session_id": "session-1", "message": "1"},
     )
 
     # 仍然保持 422，但响应体只保留面向调用方需要的摘要信息。
     assert response.status_code == 422
     payload = response.json()
     assert payload["error"] == "VALIDATION_ERROR"
-    assert "session_id" in payload["message"]
+    assert "master_agent_name" in payload["message"]
     assert "details" not in payload
 
 
@@ -216,6 +216,7 @@ async def test_chat_sse_with_metadata(chat_client):
         "/chat",
         json={
             "session_id": session_id,
+            "master_agent_name": "default",
             "message": "Hi",
             "metadata": {"source": "test", "version": "1.0"},
         },
@@ -236,7 +237,7 @@ async def test_chat_multi_turn_conversation(chat_client):
     events1 = await collect_sse_events(
         chat_client,
         "/chat",
-        json={"session_id": session_id, "message": "Hello"},
+        json={"session_id": session_id, "master_agent_name": "default", "message": "Hello"},
     )
     assert len(events1) > 0
     assert events1[-1]["event"] == "run_completed"
@@ -248,7 +249,7 @@ async def test_chat_multi_turn_conversation(chat_client):
     events2 = await collect_sse_events(
         chat_client,
         "/chat",
-        json={"session_id": session_id, "message": "How are you?"},
+        json={"session_id": session_id, "master_agent_name": "default", "message": "How are you?"},
     )
     assert len(events2) > 0
     assert events2[-1]["event"] == "run_completed"
@@ -310,7 +311,7 @@ async def test_chat_sse_with_tool_call_flow(monkeypatch):
         events = await collect_sse_events(
             client,  # 测试客户端
             "/chat",  # 请求 URL
-            json={"session_id": session_id, "message": "调用工具"},  # 请求体
+            json={"session_id": session_id, "master_agent_name": "default", "message": "调用工具"},  # 请求体
         )
 
         # 验证事件名称序列
@@ -379,7 +380,7 @@ async def test_chat_sse_persists_large_tool_result_preview_and_reuses_placeholde
         events = await collect_sse_events(  # 发起聊天请求并收集 SSE 事件。
             client,
             "/chat",
-            json={"session_id": session_id, "message": "调用超大工具"},
+            json={"session_id": session_id, "master_agent_name": "default", "message": "调用超大工具"},
         )
 
         tool_completed_event = next(event for event in events if event["event"] == "tool_use_completed")  # 读取工具完成事件。
@@ -403,3 +404,47 @@ async def test_chat_sse_persists_large_tool_result_preview_and_reuses_placeholde
         assert second_turn_messages[-1]["content"] == placeholder  # 下一轮模型上下文也应看到相同占位文本。
 
     await redis.aclose()  # 关闭 fakeredis 连接，释放测试资源。
+
+
+@pytest.mark.asyncio  # 标记为异步测试
+async def test_chat_sse_can_route_to_plan_master_agent(chat_client):
+    """验证 plan 主代理会话可以完成显式路由聊天。"""
+    create_resp = await chat_client.post("/sessions", json={"master_agent_name": "plan"})  # 创建 plan 主代理会话
+    assert create_resp.status_code == 200  # 创建成功
+    create_payload = create_resp.json()  # 解析响应
+    assert create_payload["agent_id"] == "plan"  # 验证会话绑定到 plan 代理
+
+    events = await collect_sse_events(  # 发送聊天请求并收集 SSE 事件
+        chat_client,
+        "/chat",
+        json={
+            "session_id": create_payload["session_id"],  # 使用 plan 会话
+            "master_agent_name": "plan",  # 指定 plan 主代理
+            "message": "请制定计划",  # 用户消息
+        },
+    )
+
+    assert len(events) > 0  # 至少有一个事件
+    assert events[0]["event"] == "run_started"  # 第一个事件是 run_started
+    assert events[-1]["event"] == "run_completed"  # 最后一个事件是 run_completed
+
+
+@pytest.mark.asyncio  # 标记为异步测试
+async def test_chat_sse_rejects_master_agent_session_mismatch(chat_client):
+    """验证 default 会话不能用 plan 主代理继续聊天。"""
+    create_resp = await chat_client.post("/sessions")  # 创建默认主代理会话（不传 master_agent_name）
+    session_id = create_resp.json()["session_id"]  # 获取会话 ID
+
+    events = await collect_sse_events(  # 发送聊天请求并收集 SSE 事件
+        chat_client,
+        "/chat",
+        json={
+            "session_id": session_id,  # 使用默认会话
+            "master_agent_name": "plan",  # 尝试使用 plan 主代理
+            "message": "请制定计划",  # 用户消息
+        },
+    )
+
+    assert len(events) == 1  # 只有一个错误事件
+    assert events[0]["event"] == "request_failed"  # 事件类型为 request_failed
+    assert events[0]["data"]["error_code"] == "MASTER_AGENT_SESSION_MISMATCH"  # 错误码为会话不匹配

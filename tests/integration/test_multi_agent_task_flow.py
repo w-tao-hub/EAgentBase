@@ -96,7 +96,7 @@ async def test_task_dispatch_writes_child_context_and_master_tool_result(fake_re
 
     # ========== 构建主代理（master）的 profile ==========
 
-    task_tool = TaskTool(child_runner)  # 创建 Task 工具，注入子代理执行服务
+    task_tool = TaskTool(child_runner, child_profiles={"Plan": child_profile})  # 创建 Task 工具，注入子代理执行服务和可见的 child profiles
     master_tools = ToolRegistry()  # 创建主代理工具注册表
     master_tools.register(task_tool)  # 注册 Task 工具
 

@@ -98,6 +98,12 @@ def _patch_container_redis(monkeypatch, redis, pubsub_redis=None) -> None:
     )
 
 
+def test_resolve_mount_master_agents_rejects_explicit_empty_tuple() -> None:
+    """验证显式空挂载不会被错误回退到 default。"""
+    with pytest.raises(ValueError, match="子代理挂载列表为空"):
+        Container._resolve_mount_master_agents((), {"default", "plan"}, "Worker")
+
+
 def test_create_redis_and_pubsub_redis_use_single_url_pools(monkeypatch) -> None:
     """验证单点模式下主 Redis 与 pubsub Redis 都通过 URL 连接池创建。"""
     import redis.asyncio as aioredis
@@ -624,3 +630,47 @@ async def test_container_registers_list_resumable_subagents_tool(fake_redis, mon
     list_tool = tool_registry.get("ListResumableSubagents")
     assert list_tool is not None
     assert isinstance(list_tool, ListResumableSubagentsTool)
+
+
+@pytest.mark.asyncio
+async def test_container_builds_default_and_plan_master_profiles(fake_redis, monkeypatch) -> None:
+    """验证容器会创建 default 和 plan 两个主代理 profile。"""
+    llm_adapter = StubLLMAdapter()
+    monkeypatch.setattr(litellm_adapter_module, "LiteLLMAdapter", lambda *args, **kwargs: llm_adapter)
+    _patch_container_redis(monkeypatch, fake_redis)
+    monkeypatch.setattr(Container, "_create_mcp_client_manager", staticmethod(lambda settings: StubMCPClientManager([])))
+
+    container = Container.create(settings=Settings(redis_url="redis://localhost:6379"))
+
+    default_profile = container._agent_provider.get_master_profile_by_name("default")
+    plan_profile = container._agent_provider.get_master_profile_by_name("plan")
+
+    assert default_profile.agent.agent_id == "default"
+    assert default_profile.prompt_source.path.endswith("master_prompt.md")
+    assert plan_profile.agent.agent_id == "plan"
+    assert plan_profile.prompt_source.path.endswith("plan_master_prompt.md")
+    assert default_profile.tool_registry is not plan_profile.tool_registry
+
+
+@pytest.mark.asyncio
+async def test_container_mounts_unspecified_child_agents_to_default_only(fake_redis, monkeypatch) -> None:
+    """验证未声明挂载的子代理只暴露给 default 主代理。"""
+    llm_adapter = StubLLMAdapter()
+    monkeypatch.setattr(litellm_adapter_module, "LiteLLMAdapter", lambda *args, **kwargs: llm_adapter)
+    _patch_container_redis(monkeypatch, fake_redis)
+    monkeypatch.setattr(Container, "_create_mcp_client_manager", staticmethod(lambda settings: StubMCPClientManager([])))
+
+    container = Container.create(settings=Settings(redis_url="redis://localhost:6379"))
+
+    default_task = container._agent_provider.get_master_profile_by_name("default").tool_registry.get("Task")
+    plan_task = container._agent_provider.get_master_profile_by_name("plan").tool_registry.get("Task")
+
+    default_desc = default_task.input_schema["properties"]["subagent_type"]["description"]
+    plan_desc = plan_task.input_schema["properties"]["subagent_type"]["description"]
+
+    # 未声明挂载的子代理（Worker）只对 default 可见
+    assert "Worker" in default_desc
+    assert "Worker" not in plan_desc
+    # 显式挂载到 plan 的子代理对 plan 可见
+    assert "PlanOnlyAgent" in plan_desc
+    assert "BothAgent" in plan_desc

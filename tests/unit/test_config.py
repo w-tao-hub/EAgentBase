@@ -242,3 +242,24 @@ def test_load_settings_anchors_dotenv_and_relative_paths_to_project_root(
     assert settings.mcp_servers_config_path == str(
         (project_root / "config/mcp_servers.json").resolve()
     )
+
+
+def test_settings_no_longer_exposes_master_agent_identity_fields(monkeypatch, tmp_path: Path) -> None:
+    """验证主代理名称和 ID 已经从环境配置迁移到代码内置定义。"""
+    # 切换到临时目录，避免项目 .env 文件干扰
+    monkeypatch.chdir(tmp_path)
+    # 清除所有可能干扰的环境变量
+    _clear_all_env_vars(monkeypatch)
+    # 设置必要的 Redis 连接信息
+    monkeypatch.setenv("REDIS_URL", "redis://localhost:6379/9")
+    # 设置旧的环境变量，验证它们不再被读取为配置字段
+    monkeypatch.setenv("MASTER_AGENT_ID", "env-master")
+    monkeypatch.setenv("MASTER_AGENT_NAME", "Env Master")
+
+    settings = Settings()
+
+    # 验证旧的主代理身份字段已从配置中移除
+    assert not hasattr(settings, "master_agent_id")
+    assert not hasattr(settings, "master_agent_name")
+    # 验证模型配置字段仍然存在且返回正确的默认值
+    assert settings.master_agent_model == "deepseek/deepseek-v4-flash"

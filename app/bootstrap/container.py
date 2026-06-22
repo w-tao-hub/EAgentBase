@@ -24,7 +24,12 @@ from app.infra.store.redis_task_store import RedisTaskStore
 from app.infra.store.redis_tool_result_store import RedisToolResultStore
 from app.infra.store.redis_run_cancel_bus import RedisRunCancelBus
 from app.infra.store.redis_store_transaction import RedisStoreTransaction
-from app.infra.agents.master_agent_provider import MasterAgentProvider, load_master_agent
+from app.infra.agents.master_agent_provider import (
+    MASTER_AGENT_DEFINITIONS,
+    MasterAgentProvider,
+    load_master_agent,
+)
+from app.core.models.error import ErrorCode
 from app.core.runtime.context_builder import NoTrimPolicy, TokenBudgetCompressionPolicy
 from app.core.hooks import (
     ModelHookPipeline,
@@ -56,6 +61,30 @@ from app.services.task_service import TaskService
 from app.services.run_control_service import RunControlService
 from app.services.chat_service import ChatService
 from app.services.session_cleanup_service import SessionCleanupService
+
+# base tool 固定名称集合，用于区分固定 tool 与 MCP 动态 tool。
+# 当 _MASTER_TOOL_MOUNTS 指定了挂载列表时，只过滤这些固定 tool；MCP 动态 tool 始终全部注册。
+_FIXED_TOOL_NAMES: frozenset[str] = frozenset({
+    "plan_create",
+    "plan_get",
+    "plan_update",
+    "plan_list",
+    "skill",
+    "query_tool_result",
+    "run_python_script",
+})
+
+# 按主代理名称控制 tool/hook/skill 挂载。
+# name 不在字典中 → 不挂载任何 tool/hook/skill。
+_MASTER_TOOL_MOUNTS: dict[str, tuple[str, ...]] = {
+    "default": ("plan_create", "plan_get", "plan_update", "plan_list", "skill", "query_tool_result", "run_python_script"),
+}
+_MASTER_HOOK_MOUNTS: dict[str, tuple[str, ...]] = {
+    "default": ("persist_large_result",),
+}
+_MASTER_SKILL_MOUNTS: dict[str, tuple[str, ...]] = {
+    "default": ("test-skill",),
+}
 
 if TYPE_CHECKING:
     from app.infra.tools.mcp_client_manager import MCPClientManager
@@ -358,6 +387,25 @@ class Container:
             mcp_client_manager=mcp_client_manager,
         )
 
+    @staticmethod
+    def _resolve_mount_master_agents(
+        mount_master_agents: tuple[str, ...] | None,
+        known_master_names: set[str],
+        child_name: str,
+    ) -> tuple[str, ...]:
+        """把子代理挂载配置归一为主代理名称元组。"""
+        # 仅在字段缺省时回退到 default；显式空列表要视为配置错误。
+        resolved = ("default",) if mount_master_agents is None else mount_master_agents
+        if not resolved:
+            raise ValueError(f"{ErrorCode.INVALID_MASTER_AGENT_CONFIG.value}: 子代理挂载列表为空: {child_name}")
+        unknown_names = sorted(set(resolved) - known_master_names)
+        if unknown_names:
+            raise ValueError(
+                f"{ErrorCode.INVALID_MASTER_AGENT_CONFIG.value}: "
+                f"子代理 {child_name} 挂载了未知主代理: {unknown_names}"
+            )
+        return tuple(resolved)
+
     @classmethod
     def _build_profiles(
         cls,
@@ -378,17 +426,34 @@ class Container:
             default_prompt_root=default_prompt_root,
         )
 
+        known_master_names = {definition.name for definition in MASTER_AGENT_DEFINITIONS}
+        child_mounts: dict[str, tuple[str, ...]] = {}
+
         child_profiles: dict[str, AgentExecutionProfile] = {}
         for definition in DEFAULT_SUB_AGENT_DEFINITIONS:
             profile = profile_builder.build_default_profile(definition)
             child_profiles[profile.agent_id] = profile
+            child_mounts[profile.agent_id] = cls._resolve_mount_master_agents(
+                definition.mount_master_agents,
+                known_master_names,
+                profile.agent_id,
+            )
+
         custom_definitions = CustomSubAgentLoader(
             project_root / "agents",
-            reserved_names={defn.name for defn in DEFAULT_SUB_AGENT_DEFINITIONS},
+            reserved_names={
+                *(defn.name for defn in DEFAULT_SUB_AGENT_DEFINITIONS),
+                *(definition.name for definition in MASTER_AGENT_DEFINITIONS),
+            },
         ).load()
         for definition in custom_definitions:
             profile = profile_builder.build_custom_profile(definition)
             child_profiles[profile.agent_id] = profile
+            child_mounts[profile.agent_id] = cls._resolve_mount_master_agents(
+                definition.mount_master_agents,
+                known_master_names,
+                profile.agent_id,
+            )
 
         agent_loop = AgentLoop(default_max_turns=settings.agent_max_turns)
         context_trim_policy = (
@@ -411,32 +476,65 @@ class Container:
             tool_catalog=tooling.base_tool_catalog,
             context_trim_policy=context_trim_policy,
         )
-        task_tool = TaskTool(child_runner, child_profiles=child_profiles)
-        list_resumable_subagents_tool = ListResumableSubagentsTool(infra.session_store)
 
-        master_tool_registry = ToolRegistry()
-        for tool in tooling.base_tool_catalog.values():
-            master_tool_registry.register(tool)
-        master_tool_registry.register(task_tool)
-        master_tool_registry.register(list_resumable_subagents_tool)
+        master_profiles: dict[str, AgentExecutionProfile] = {}
+        for master_definition in MASTER_AGENT_DEFINITIONS:
+            # 为每个主代理创建仅包含其可见子代理的 TaskTool
+            visible_child_profiles = {
+                child_name: child_profile
+                for child_name, child_profile in child_profiles.items()
+                if master_definition.name in child_mounts[child_name]
+            }
+            task_tool = TaskTool(child_runner, child_profiles=visible_child_profiles)
+            list_resumable_subagents_tool = ListResumableSubagentsTool(infra.session_store)
 
-        master_agent = load_master_agent(settings)
-        master_profile = AgentExecutionProfile(
-            agent_id=master_agent.agent_id,
-            agent=master_agent,
-            prompt_source=AgentPromptSource(
-                kind="file",
-                path=str(project_root / "app" / "infra" / "agents" / "master_prompt.md"),
-            ),
-            runtime=runtime_bundle.runtime,
-            tool_registry=master_tool_registry,
-            tool_hook_pipeline=runtime_bundle.tool_hook_pipeline,
-            max_turns=settings.agent_max_turns,
-            extra_system_messages=tuple([tooling.skill_reminder] if tooling.skill_reminder else []),
-        )
+            # 每个主代理有独立的 ToolRegistry，按 _MASTER_TOOL_MOUNTS 控制挂载
+            # _FIXED_TOOL_NAMES 中的工具按列表过滤；MCP 动态工具不受限制始终注册
+            allowed_tools = _MASTER_TOOL_MOUNTS.get(master_definition.name)
+            master_tool_registry = ToolRegistry()
+            if allowed_tools is not None:
+                for name, tool in tooling.base_tool_catalog.items():
+                    if name not in _FIXED_TOOL_NAMES or name in allowed_tools:
+                        master_tool_registry.register(tool)
+            master_tool_registry.register(task_tool)
+            master_tool_registry.register(list_resumable_subagents_tool)
+
+            # 按 _MASTER_HOOK_MOUNTS 为当前主代理装配独立的 tool_hook_pipeline
+            hook_names = _MASTER_HOOK_MOUNTS.get(master_definition.name)
+            if hook_names:
+                hooks = [runtime_bundle.hook_registry.get_tool_hook(n) for n in hook_names]
+                tool_hook_pipeline = ToolHookPipeline(hooks)
+            else:
+                tool_hook_pipeline = ToolHookPipeline()
+
+            # 按 _MASTER_SKILL_MOUNTS 为当前主代理装配 extra_system_messages
+            # skill 没有全局默认，只在字典中显式配置才加入
+            skill_names = _MASTER_SKILL_MOUNTS.get(master_definition.name)
+            skill_contents: list[str] = []
+            if skill_names:
+                for n in skill_names:
+                    try:
+                        skill_contents.append(tooling.skill_catalog.get(n).content)
+                    except ValueError:
+                        pass  # skill 不存在则跳过
+            extra_system_messages = tuple(skill_contents) if skill_contents else ()
+
+            # 加载主代理
+            master_agent = load_master_agent(settings=settings, definition=master_definition)
+            prompt_path = project_root / "app" / "infra" / "agents" / master_definition.prompt_file
+            master_profiles[master_definition.name] = AgentExecutionProfile(
+                agent_id=master_agent.agent_id,
+                agent=master_agent,
+                prompt_source=AgentPromptSource(kind="file", path=str(prompt_path)),
+                runtime=runtime_bundle.runtime,
+                tool_registry=master_tool_registry,
+                tool_hook_pipeline=tool_hook_pipeline,
+                max_turns=settings.agent_max_turns,
+                extra_system_messages=extra_system_messages,
+            )
 
         agent_provider = MasterAgentProvider(
-            default_profile=master_profile,
+            master_profiles=master_profiles,
             child_profiles=child_profiles,
         )
         return _ProfilesBundle(

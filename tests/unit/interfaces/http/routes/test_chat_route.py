@@ -47,9 +47,9 @@ class StubChatService:
         self.closed = asyncio.Event()  # 记录上游事件流的 finally 是否最终跑完
         self.cancel_event: asyncio.Event | None = None  # 记录路由透传下来的取消事件，便于断言
 
-    async def stream_chat(self, session_id: str, user_message: str, metadata: dict | None = None, cancel_event: asyncio.Event | None = None):
+    async def stream_chat(self, session_id: str, master_agent_name: str, user_message: str, metadata: dict | None = None, cancel_event: asyncio.Event | None = None):
         """返回一个最小异步事件流，并在 finally 中模拟较慢清理。"""
-        del session_id, user_message, metadata  # 该替身只验证清理链，不消费业务参数
+        del session_id, master_agent_name, user_message, metadata  # 该替身只验证清理链，不消费业务参数
         self.cancel_event = cancel_event  # 保存路由注入的取消事件，便于测试验证断连信号已透传到服务层
         try:
             yield RunStartedEvent(run_id="run-route-test", session_id="session-route-test")  # 先产出一个事件，让外层流正式进入工作状态
@@ -68,7 +68,7 @@ async def test_chat_route_cleanup_survives_task_cancellation_during_disconnect()
 
     response = await chat_route(  # 直接调用聊天路由函数，拿到真实 StreamingResponse 与包装后的 body_iterator
         request=request,
-        payload=ChatRequest(session_id="session-route-test", message="hi"),
+        payload=ChatRequest(session_id="session-route-test", master_agent_name="default", message="hi"),
         chat_service=chat_service,
     )
     body_iterator = response.body_iterator  # 读取包装后的 SSE 生成器，后续直接操作 aclose 路径

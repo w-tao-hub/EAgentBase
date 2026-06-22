@@ -39,3 +39,31 @@ class AgentProvider(Protocol):
     def get_sub_agents(self) -> list[Agent]:
         """获取所有已注册的子智能体列表。"""
         ...
+
+    def get_master_profile_by_name(self, name: str) -> AgentExecutionProfile:
+        """按主代理名称获取执行 profile。
+
+        Args:
+            name: 主代理名称（与 MASTER_AGENT_DEFINITIONS 中的 name 对应）
+
+        Returns:
+            对应的 AgentExecutionProfile
+
+        Raises:
+            ValueError: 当指定名称的主代理不存在时
+        """
+        ...
+
+    def get_master_profile(self, agent_id: str) -> AgentExecutionProfile:
+        """按主代理 ID 获取执行 profile。
+
+        Args:
+            agent_id: 主代理唯一标识
+
+        Returns:
+            对应的 AgentExecutionProfile
+
+        Raises:
+            ValueError: 当指定 ID 的主代理不存在时
+        """
+        ...

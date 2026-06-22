@@ -11,7 +11,7 @@ from pathlib import Path
 
 
 # md frontmatter 允许/禁止字段
-_ALLOWED_FIELDS = {"name", "description", "tools", "skills", "max_turns", "tool_hook_profiles", "model_hook_profiles"}
+_ALLOWED_FIELDS = {"name", "description", "tools", "skills", "max_turns", "tool_hook_profiles", "model_hook_profiles", "mount_master_agents"}
 
 # 禁止 Agent 模型层敏感配置通过 md 暴露
 _BANNED_FIELDS = {
@@ -43,6 +43,7 @@ class CustomSubAgentDefinition:
     max_turns: int | None = None
     tool_hook_profiles: tuple[str, ...] | None = None
     model_hook_profiles: tuple[str, ...] | None = None
+    mount_master_agents: tuple[str, ...] | None = None
     source_path: Path | None = None
 
 
@@ -105,6 +106,7 @@ class CustomSubAgentLoader:
             max_turns=max_turns,
             tool_hook_profiles=self._parse_optional_string_list(frontmatter.get("tool_hook_profiles")),
             model_hook_profiles=self._parse_optional_string_list(frontmatter.get("model_hook_profiles")),
+            mount_master_agents=self._parse_optional_string_list(frontmatter.get("mount_master_agents")),
             source_path=path,
         )
 

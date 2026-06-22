@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -92,14 +93,16 @@ class FakeChildRunner:
 async def test_task_tool_case_sensitive_subagent_type() -> None:
     """测试 subagent_type 匹配大小写敏感。
 
-    验证 "plan"（小写）不会命中 "Plan"，runner 应返回 UNKNOWN_SUBAGENT 错误。
-    这是设计决策：subagent_type 大小写敏感，确保类型名称的精确性。
+    验证 "plan"（小写）不会命中 "Plan"。挂载校验层大小写敏感，
+    child_profiles 中只有 "Plan" 时，传入 "plan" 应返回 SUBAGENT_NOT_MOUNTED 错误。
 
     真实 ChildAgentRunner 使用字典直接键查找 ("Plan" in profiles)，
     不进行 lower() 转换，因此 "plan" != "Plan" 会导致 KeyError。
     """
     runner = FakeChildRunner(known_subagent_types={"Plan"})  # 创建 fake runner，只认 "Plan"（大小写敏感）
-    tool = TaskTool(runner)  # 创建被测试的 TaskTool 实例
+    # TaskTool 传入包含 "Plan" 的 child_profiles，确保挂载校验通过
+    mock_profile = MagicMock()  # 最小 mock profile，call() 仅检查 key 是否存在
+    tool = TaskTool(runner, child_profiles={"Plan": mock_profile})  # 创建被测试的 TaskTool 实例
     context = ExecutionContext(  # 构造 master 执行上下文
         run_id="master-run",  # master run ID
         session_id="session-1",  # 会话 ID
@@ -110,16 +113,15 @@ async def test_task_tool_case_sensitive_subagent_type() -> None:
         tool_name="Task",  # 当前工具名
     )
 
-    # "plan" (小写) 不应命中 "Plan"，FakeChildRunner 会抛出 UNKNOWN_SUBAGENT
+    # "plan" (小写) 不应命中 "Plan"，挂载校验层按大小写敏感拒绝
     result = await tool.call(
         {"description": "制定计划", "prompt": "制定实施计划", "subagent_type": "plan"},
         context,
     )
     assert result.is_error is True  # 应该返回错误
-    assert "UNKNOWN_SUBAGENT" in result.content  # 确认错误码出现在结果中
-    # 验证 subagent_type 按原样传递（大小写敏感，未转 lower）
-    assert runner.last_call is not None  # 确认 runner 确实被调用了
-    assert runner.last_call["subagent_type"] == "plan"  # 保持原始大小写
+    assert "SUBAGENT_NOT_MOUNTED" in result.content  # 确认错误码出现在结果中
+    # 验证 runner 未被调用（挂载校验在进入 runner 之前就已拦截）
+    assert runner.last_call is None  # 确认 runner 没有被调用
 
 
 @pytest.mark.asyncio  # 标记为异步测试
@@ -129,7 +131,9 @@ async def test_task_tool_dispatches_child_with_resume() -> None:
     验证 resume 参数正确透传，且工具结果中包含 child_id 标识。
     """
     runner = FakeChildRunner()  # 创建 fake runner
-    tool = TaskTool(runner)  # 创建被测试的 TaskTool 实例
+    # TaskTool 传入包含 "Plan" 的 child_profiles，确保挂载校验通过
+    mock_profile = MagicMock()  # 最小 mock profile
+    tool = TaskTool(runner, child_profiles={"Plan": mock_profile})  # 创建被测试的 TaskTool 实例
     context = ExecutionContext(  # 构造 master 执行上下文
         run_id="master-run",  # master run ID
         session_id="session-1",  # 会话 ID
@@ -255,7 +259,9 @@ async def test_task_tool_rejects_missing_required_params() -> None:
 async def test_task_tool_passes_description_to_child_runner() -> None:
     """测试 TaskTool 会把 description 透传给 ChildAgentRunner。"""
     runner = FakeChildRunner()  # 创建 fake runner
-    tool = TaskTool(runner)  # 创建被测试的 TaskTool 实例
+    # TaskTool 传入包含 "Plan" 的 child_profiles，确保挂载校验通过
+    mock_profile = MagicMock()  # 最小 mock profile
+    tool = TaskTool(runner, child_profiles={"Plan": mock_profile})  # 创建被测试的 TaskTool 实例
     context = ExecutionContext(  # 构造 master 执行上下文
         run_id="master-run",  # master run ID
         session_id="session-1",  # 会话 ID
@@ -284,7 +290,9 @@ async def test_task_tool_records_description_on_resume_failure() -> None:
     """测试 resume 校验失败时 description 仍被记录到 runner kwargs。"""
     runner = FakeChildRunner()  # 创建 fake runner
     runner.raise_on_resume = True  # 启用 resume 失败模拟
-    tool = TaskTool(runner)  # 创建被测试的 TaskTool 实例
+    # TaskTool 传入包含 "Plan" 的 child_profiles，确保挂载校验通过
+    mock_profile = MagicMock()  # 最小 mock profile
+    tool = TaskTool(runner, child_profiles={"Plan": mock_profile})  # 创建被测试的 TaskTool 实例
     context = ExecutionContext(  # 构造 master 执行上下文
         run_id="master-run",  # master run ID
         session_id="session-1",  # 会话 ID
@@ -307,3 +315,38 @@ async def test_task_tool_records_description_on_resume_failure() -> None:
 
     assert result.is_error is True  # 工具应返回错误
     assert runner.last_call["description"] == "失败的恢复描述"  # description 仍应被记录
+
+
+@pytest.mark.asyncio  # 标记为异步测试
+async def test_task_tool_rejects_subagent_not_mounted_in_current_master() -> None:
+    """验证 TaskTool 不允许调用未挂载到当前主代理的子代理。
+
+    TaskTool 由 Container 在构建每个主代理的 profile 时创建，
+    只传入该主代理挂载的子代理 profiles。
+    如果 LLM 尝试调用未挂载的子代理类型，TaskTool 应在工具层返回错误，
+    而不是透传到 ChildAgentRunner。
+    """
+    runner = FakeChildRunner()  # 创建 fake runner
+    tool = TaskTool(runner, child_profiles={})  # 传入空 child_profiles，模拟无子代理挂载
+    context = ExecutionContext(  # 构造 master 执行上下文
+        run_id="master-run",  # master run ID
+        session_id="session-1",  # 会话 ID
+        metadata=None,  # 无额外元数据
+        agent=create_fake_agent(),  # 假 Agent 实例
+        run_type="master",  # master 类型，满足非 child 检查
+        tool_call_id="call-1",  # 合法的 tool_call_id
+        tool_name="Task",  # 当前工具名
+    )
+
+    result = await tool.call(  # 调用 Task 工具
+        {
+            "description": "规划任务",  # 任务描述
+            "prompt": "拆解需求",  # 任务 prompt
+            "subagent_type": "Planner",  # 子代理类型，不在 child_profiles 中
+        },
+        context,  # 合法上下文
+    )
+
+    assert result.is_error is True  # 应该返回错误
+    assert ErrorCode.SUBAGENT_NOT_MOUNTED.value in result.content  # 确认错误码出现在结果中
+    assert "Planner" in result.content  # 确认结果包含被拒绝的代理类型名

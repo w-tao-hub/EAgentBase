@@ -1,8 +1,9 @@
 """MasterAgentProvider 的单元测试（v2 多 profile 版本）。
 
 测试覆盖：
-- MasterAgentProvider 作为多 profile 注册中心的行为
-- load_master_agent() 工具函数从 Settings 和文件加载主 Agent 元信息
+- 内置主代理定义的稳定性
+- load_master_agent() 按代码定义和配置加载主 Agent
+- MasterAgentProvider 作为多 profile 注册中心的行为（按名称/ID查找、校验）
 """
 
 from __future__ import annotations
@@ -11,15 +12,16 @@ import pytest
 
 from app.config import Settings
 from app.core.hooks import ToolHookPipeline
-from app.core.models.agent import AgentExecutionProfile, AgentPromptSource
+from app.core.models.agent import Agent, AgentExecutionProfile, AgentPromptSource
 from app.core.models.error import ErrorCode
 from app.core.models.tool import ToolRegistry
 from app.infra.agents.master_agent_provider import (
+    DEFAULT_MASTER_AGENT_NAME,  # 默认主代理名称常量
+    MASTER_AGENT_DEFINITIONS,  # 内置主代理定义元组
+    MasterAgentDefinition,  # 主代理静态定义数据类
     MasterAgentProvider,  # 多 profile 注册中心
-    _CURRENT_DIR,  # 主智能体提示词文件所在目录
     load_master_agent,  # 主 Agent 加载工具函数
 )
-from tests.fakes import FakeAgentRuntime, create_fake_agent
 
 
 # ============================================================================
@@ -29,17 +31,17 @@ from tests.fakes import FakeAgentRuntime, create_fake_agent
 
 def _build_settings(
     *,
-    master_agent_id: str = "custom-master-agent",
-    master_agent_name: str = "Custom Master Agent",
     master_agent_model: str = "deepseek/custom-model",
     master_agent_temperature: float = 0.35,
     master_agent_reasoning_effort: str = "high",
 ) -> Settings:
-    """构造测试专用 Settings，显式覆盖主智能体配置字段。"""
+    """构造测试专用 Settings，显式覆盖主智能体运行时配置字段。
+
+    注意：主代理的 agent_id 和 name 已从环境配置迁移到代码内置定义，
+    不再作为 Settings 字段，因此本函数不再提供这些参数。
+    """
     return Settings(
         redis_url="redis://localhost:6379/0",
-        master_agent_id=master_agent_id,
-        master_agent_name=master_agent_name,
         master_agent_model=master_agent_model,
         master_agent_temperature=master_agent_temperature,
         master_agent_reasoning_effort=master_agent_reasoning_effort,
@@ -47,10 +49,10 @@ def _build_settings(
 
 
 def _build_profile(agent_id: str) -> AgentExecutionProfile:
-    """构造测试用 AgentExecutionProfile。
+    """构建最小测试用 AgentExecutionProfile。
 
-    使用 FakeAgentRuntime 和空的 ToolRegistry / ToolHookPipeline 构造最小可用 profile，
-    供 MasterAgentProvider 各方法的单元测试使用。
+    直接构造 Agent 和 AgentExecutionProfile，不依赖测试假对象，
+    使测试数据更加自包含和可读。
 
     Args:
         agent_id: profile 和 agent 的标识
@@ -58,51 +60,64 @@ def _build_profile(agent_id: str) -> AgentExecutionProfile:
     Returns:
         最小可用 AgentExecutionProfile 实例
     """
-    # 基于 create_fake_agent 创建 Agent，覆盖 agent_id 和 name 使其与传入参数一致
-    agent = create_fake_agent().model_copy(update={"agent_id": agent_id, "name": agent_id})
-    # 构造最小可用 profile
+    agent = Agent(
+        agent_id=agent_id,
+        name=agent_id,
+        model="test-model",
+        system_prompt=f"System prompt for {agent_id}",
+        temperature=0.2,
+    )
     return AgentExecutionProfile(
-        agent_id=agent_id,  # profile 标识
-        agent=agent,  # 测试 Agent 元信息
-        prompt_source=AgentPromptSource(kind="file", path=f"{agent_id}.md"),  # 模拟文件来源
-        runtime=FakeAgentRuntime(),  # 使用假运行时
-        tool_registry=ToolRegistry(),  # 空工具注册表
-        tool_hook_pipeline=ToolHookPipeline(),  # 空 Hook 管线
-        max_turns=10,  # 测试用最大轮数
+        agent_id=agent.agent_id,
+        agent=agent,
+        prompt_source=AgentPromptSource(kind="file", path=f"{agent_id}.md"),
+        runtime=object(),  # 使用最小 object 占位，测试不关心运行时
+        tool_registry=ToolRegistry(),
+        tool_hook_pipeline=ToolHookPipeline(),
+        max_turns=10,
     )
 
 
 # ============================================================================
-# load_master_agent() 工具函数测试
+# 内置主代理定义与加载测试
 # ============================================================================
 
 
-def test_load_master_agent_returns_agent_from_settings():
-    """测试 load_master_agent() 能从 Settings 正确加载主智能体。"""
-    # 显式构造带有自定义字段的 Settings，确保函数读取的是配置对象而不是硬编码默认值。
-    settings = _build_settings()
-    # 调用工具函数加载主 Agent，验证运行时配置注入链路。
-    agent = load_master_agent(settings)
+def test_builtin_master_agent_definitions_are_stable() -> None:
+    """验证内置主代理清单稳定，且 agent_id 与 name 保持一致。"""
+    definitions = {definition.name: definition for definition in MASTER_AGENT_DEFINITIONS}
 
-    # 断言主智能体标识、名称、模型全部来自 Settings。
-    assert agent.agent_id == "custom-master-agent"
-    assert agent.name == "Custom Master Agent"
+    assert DEFAULT_MASTER_AGENT_NAME == "default"
+    assert set(definitions) == {"default", "plan"}
+    assert definitions["default"].agent_id == "default"
+    assert definitions["default"].prompt_file == "master_prompt.md"
+    assert definitions["plan"].agent_id == "plan"
+    assert definitions["plan"].prompt_file == "plan_master_prompt.md"
+
+
+def test_load_master_agent_uses_definition_identity_and_settings_model() -> None:
+    """验证主代理身份来自代码定义，模型参数继续来自 Settings。
+
+    主代理的 agent_id 和 name 由 MasterAgentDefinition 控制，
+    而 model、temperature、reasoning_effort 继续从 Settings 读取。
+    """
+    settings = _build_settings(
+        master_agent_reasoning_effort="max",
+    )
+    definition = MasterAgentDefinition(
+        agent_id="custom",
+        name="custom",
+        prompt_file="master_prompt.md",
+    )
+
+    agent = load_master_agent(settings=settings, definition=definition)
+
+    assert agent.agent_id == "custom"
+    assert agent.name == "custom"
     assert agent.model == "deepseek/custom-model"
-    # 验证 system_prompt 仍然来自仓库内的 master_prompt.md，而不是被迁移到环境变量。
-    assert agent.system_prompt.startswith("你是一个乐于助人且专业的 AI 编程助手。")
-
-
-def test_load_master_agent_preserves_float_temperature():
-    """测试主智能体温度字段会按浮点数透传到 Agent。"""
-    # 使用非默认浮点值，保护温度配置在 Settings -> Agent 链路中的精度传递。
-    agent = load_master_agent(_build_settings(master_agent_temperature=0.73))
-    assert agent.temperature == 0.73
-
-
-def test_load_master_agent_preserves_reasoning_effort() -> None:
-    """测试主智能体思考强度字段会按配置透传到 Agent。"""
-    agent = load_master_agent(_build_settings(master_agent_reasoning_effort="max"))
+    assert agent.temperature == 0.35
     assert agent.reasoning_effort == "max"
+    assert agent.system_prompt.startswith("你是一个乐于助人且专业的 AI 编程助手。")
 
 
 # ============================================================================
@@ -110,33 +125,56 @@ def test_load_master_agent_preserves_reasoning_effort() -> None:
 # ============================================================================
 
 
-def test_master_agent_provider_returns_profiles_by_id() -> None:
-    """测试 MasterAgentProvider 能按 agent_id 或子代理类型名称查找 profile。"""
-    # 构造 master 和 Plan 两个测试 profile
-    master_profile = _build_profile("master-agent")
-    plan_profile = _build_profile("Plan")
-    # 使用新版 profile 注册中心构造函数
+def test_master_agent_provider_returns_master_profiles_by_name_and_id() -> None:
+    """验证 provider 同时支持按主代理名称和 ID 查找。
+
+    新构造函数使用 master_profiles 字典收纳多个主代理 profile，
+    同时继续支持 child_profiles 字典管理子代理。
+    """
+    default_profile = _build_profile("default")
+    plan_profile = _build_profile("plan")
+    worker_profile = _build_profile("Worker")
     provider = MasterAgentProvider(
-        default_profile=master_profile,  # 注入默认主 profile
-        child_profiles={"Plan": plan_profile},  # 注入 Plan 子代理 profile
+        master_profiles={
+            "default": default_profile,
+            "plan": plan_profile,
+        },
+        child_profiles={"Worker": worker_profile},
     )
 
-    # get_default() 应返回默认 profile 的 Agent 静态配置
-    assert provider.get_default() is master_profile.agent
-    # get_default_profile() 应返回默认 profile 本身
-    assert provider.get_default_profile() is master_profile
-    # get_profile() 应按 agent_id 定位到对应 profile
-    assert provider.get_profile("master-agent") is master_profile
-    # get_child_profile() 应按子代理类型名称定位到对应 profile
-    assert provider.get_child_profile("Plan") is plan_profile
-    # get_sub_agents() 应返回所有子代理的 Agent 列表
-    assert provider.get_sub_agents() == [plan_profile.agent]
+    assert provider.get_default() is default_profile.agent
+    assert provider.get_default_profile() is default_profile
+    assert provider.get_master_profile_by_name("default") is default_profile
+    assert provider.get_master_profile_by_name("plan") is plan_profile
+    assert provider.get_master_profile("plan") is plan_profile
+    assert provider.get_profile("Worker") is worker_profile
+    assert provider.get_sub_agents() == [worker_profile.agent]
+
+
+def test_master_agent_provider_rejects_unknown_master_name() -> None:
+    """验证未知主代理名称返回明确业务错误。
+
+    当按名称查找不存在的主代理时，应抛出带 UNKNOWN_MASTER_AGENT 错误码的 ValueError。
+    """
+    provider = MasterAgentProvider(master_profiles={"default": _build_profile("default")})
+
+    with pytest.raises(ValueError, match=f"{ErrorCode.UNKNOWN_MASTER_AGENT.value}: ghost"):
+        provider.get_master_profile_by_name("ghost")
+
+
+def test_master_agent_provider_requires_default_master() -> None:
+    """验证 provider 启动时必须包含 default 主代理。
+
+    构造时不传 default 主代理应抛出带 INVALID_MASTER_AGENT_CONFIG 错误码的 ValueError。
+    """
+    with pytest.raises(ValueError, match=f"{ErrorCode.INVALID_MASTER_AGENT_CONFIG.value}: 缺少默认主代理 default"):
+        MasterAgentProvider(master_profiles={"plan": _build_profile("plan")})
 
 
 def test_master_agent_provider_get_default_profile_identity() -> None:
     """测试 get_default_profile() 返回的 profile 与 get_default().agent 一致。"""
-    master_profile = _build_profile("master-agent")
-    provider = MasterAgentProvider(default_profile=master_profile)
+    master_profile = _build_profile("default")
+    provider = MasterAgentProvider(master_profiles={"default": master_profile})
 
     # 多次调用 get_default_profile() 应返回同一对象
     assert provider.get_default_profile() is master_profile
@@ -147,7 +185,7 @@ def test_master_agent_provider_get_default_profile_identity() -> None:
 
 def test_master_agent_provider_get_profile_unknown_raises_valueerror() -> None:
     """测试按不存在的 agent_id 查找 profile 时抛出 ValueError。"""
-    provider = MasterAgentProvider(default_profile=_build_profile("master-agent"))
+    provider = MasterAgentProvider(master_profiles={"default": _build_profile("default")})
 
     # 查找不存在的 agent_id 应抛出 ValueError
     with pytest.raises(ValueError, match="Agent profile 未找到"):
@@ -156,7 +194,7 @@ def test_master_agent_provider_get_profile_unknown_raises_valueerror() -> None:
 
 def test_master_agent_provider_get_child_profile_unknown_raises_unknown_subagent() -> None:
     """测试按不存在的子代理类型查找 profile 时抛出带 UNKNOWN_SUBAGENT 错误码的 ValueError。"""
-    provider = MasterAgentProvider(default_profile=_build_profile("master-agent"))
+    provider = MasterAgentProvider(master_profiles={"default": _build_profile("default")})
 
     # 查找不存在的子代理类型应抛出带 UNKNOWN_SUBAGENT 错误码的 ValueError
     with pytest.raises(ValueError, match=f"{ErrorCode.UNKNOWN_SUBAGENT.value}: UnknownAgent"):
@@ -169,7 +207,7 @@ def test_master_agent_provider_get_sub_agents_with_multiple_children() -> None:
     explore_profile = _build_profile("Explore")
     # 构造包含两个子代理的注册中心
     provider = MasterAgentProvider(
-        default_profile=_build_profile("master-agent"),
+        master_profiles={"default": _build_profile("default")},
         child_profiles={"Plan": plan_profile, "Explore": explore_profile},
     )
 
@@ -183,15 +221,8 @@ def test_master_agent_provider_get_sub_agents_with_multiple_children() -> None:
 
 def test_master_agent_provider_get_sub_agents_empty_by_default() -> None:
     """测试未传入子代理时 get_sub_agents() 返回空列表。"""
-    # 只传入默认 profile，不传入子代理
-    provider = MasterAgentProvider(default_profile=_build_profile("master-agent"))
+    # 只传入默认主代理，不传入子代理
+    provider = MasterAgentProvider(master_profiles={"default": _build_profile("default")})
 
     # get_sub_agents() 应返回空列表
     assert provider.get_sub_agents() == []
-
-
-def test_master_agent_provider_prompt_file_exists():
-    """测试主智能体提示词文件必须存在。"""
-    # 本次迁移只移动静态字段到 Settings，不迁移提示词文件，因此仍需保证 prompt 文件存在。
-    prompt_path = _CURRENT_DIR / "master_prompt.md"
-    assert prompt_path.exists(), f"主智能体提示词文件不存在: {prompt_path}"

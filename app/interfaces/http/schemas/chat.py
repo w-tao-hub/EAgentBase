@@ -11,5 +11,6 @@ class ChatRequest(BaseModel):
     """聊天请求模型。"""
 
     session_id: str = Field(min_length=1)
+    master_agent_name: str = Field(min_length=1)
     message: str = Field(min_length=1)
     metadata: Optional[dict] = None

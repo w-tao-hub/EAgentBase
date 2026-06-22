@@ -44,6 +44,30 @@ async def test_create_session_returns_http_200_with_session_id(async_client):
 
 
 @pytest.mark.asyncio
+async def test_create_session_can_bind_plan_master_agent(async_client):
+    """测试创建会话时可以绑定 plan 主代理。"""
+    response = await async_client.post("/sessions", json={"master_agent_name": "plan"})
+
+    assert response.status_code == 200
+
+    data = response.json()
+    assert data["agent_id"] == "plan"
+    assert "session_id" in data
+
+
+@pytest.mark.asyncio
+async def test_create_session_returns_request_failed_for_unknown_master_agent(async_client):
+    """测试创建会话时未知主代理返回 request_failed。"""
+    response = await async_client.post("/sessions", json={"master_agent_name": "ghost"})
+
+    assert response.status_code == 200
+
+    data = response.json()
+    assert data["type"] == "request_failed"
+    assert data["error_code"] == "UNKNOWN_MASTER_AGENT"
+
+
+@pytest.mark.asyncio
 async def test_get_session_returns_session_view(async_client):
     """测试查询会话接口返回正确的会话视图。"""
     create_response = await async_client.post("/sessions")

@@ -18,6 +18,7 @@ class DefaultSubAgentDefinition:
     tool_hook_profiles: tuple[str, ...] | None = None
     model_hook_profiles: tuple[str, ...] | None = None
     extra_system_messages: tuple[str, ...] = ()
+    mount_master_agents: tuple[str, ...] | None = None
 
     def with_overrides(self, **changes: object) -> "DefaultSubAgentDefinition":
         """测试和局部配置复用的不可变覆盖方法。"""

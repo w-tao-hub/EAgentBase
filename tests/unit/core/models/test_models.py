@@ -518,3 +518,8 @@ def test_error_code_enum_members() -> None:
     assert ErrorCode.RUN_NOT_FOUND.value == "RUN_NOT_FOUND"
     assert ErrorCode.SESSION_RUN_CONFLICT.value == "SESSION_RUN_CONFLICT"
     assert ErrorCode.LLM_REQUEST_FAILED.value == "LLM_REQUEST_FAILED"
+    # 多主代理路由相关错误码
+    assert ErrorCode.UNKNOWN_MASTER_AGENT.value == "UNKNOWN_MASTER_AGENT"
+    assert ErrorCode.MASTER_AGENT_SESSION_MISMATCH.value == "MASTER_AGENT_SESSION_MISMATCH"
+    assert ErrorCode.INVALID_MASTER_AGENT_CONFIG.value == "INVALID_MASTER_AGENT_CONFIG"
+    assert ErrorCode.SUBAGENT_NOT_MOUNTED.value == "SUBAGENT_NOT_MOUNTED"

@@ -68,13 +68,7 @@ class Settings(BaseSettings):
     # 0 表示关闭上下文压缩，大于 0 时 ChatService 会据此判断是否需要压缩历史上下文。
     context_token_threshold: int = Field(default=0, ge=0)
 
-    # 会话创建时绑定的默认 agent_id。
-    master_agent_id: str = Field(default="master-agent", min_length=1)
-
-    # API 返回与运行时上下文中的可读名称。
-    master_agent_name: str = Field(default="Master Agent", min_length=1)
-
-    # 驱动 LiteLLM 选择上游模型。默认 DeepSeek V4 Flash，新协议默认开启 thinking。
+    # 驱动 LiteLLM 选择上游模型。所有主代理和子代理统一使用的模型标识，默认 DeepSeek V4 Flash，新协议默认开启 thinking。
     master_agent_model: str = Field(default="deepseek/deepseek-v4-flash", min_length=1)
 
     # 控制模型采样随机性，默认值 0.2。

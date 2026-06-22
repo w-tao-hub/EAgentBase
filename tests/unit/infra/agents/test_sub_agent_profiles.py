@@ -122,6 +122,69 @@ def test_custom_loader_rejects_name_conflict_with_default_plan(tmp_path: Path) -
         CustomSubAgentLoader(tmp_path, reserved_names={"Plan"}).load()
 
 
+def test_custom_loader_rejects_name_conflict_with_master_agent(tmp_path: Path) -> None:
+    """测试自定义子代理不能与主代理名称重名。"""
+    agent_file = tmp_path / "default.md"
+    agent_file.write_text(
+        "---\n"
+        "name: default\n"
+        "description: 主代理重名测试\n"
+        "---\n"
+        "正文\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="默认子代理重名"):
+        CustomSubAgentLoader(tmp_path, reserved_names={"default", "plan"}).load()
+
+
+def test_default_worker_mounts_to_default_when_unspecified() -> None:
+    """验证默认 Worker 未显式配置挂载时由容器解释为 default。"""
+    worker = DEFAULT_SUB_AGENT_DEFINITIONS[0]
+
+    assert worker.name == "Worker"
+    assert worker.mount_master_agents is None
+
+
+def test_custom_loader_parses_mount_master_agents_list(tmp_path: Path) -> None:
+    """验证自定义子代理可以声明挂载的主代理名称列表。"""
+    agent_file = tmp_path / "planner.md"
+    agent_file.write_text(
+        "---\n"
+        "name: Planner\n"
+        "description: 规划子代理\n"
+        "mount_master_agents:\n"
+        "  - default\n"
+        "  - plan\n"
+        "---\n"
+        "你是规划子代理。\n",
+        encoding="utf-8",
+    )
+
+    definitions = CustomSubAgentLoader(tmp_path).load()
+
+    assert len(definitions) == 1
+    assert definitions[0].mount_master_agents == ("default", "plan")
+
+
+def test_custom_loader_parses_mount_master_agents_csv(tmp_path: Path) -> None:
+    """验证挂载字段支持逗号分隔字符串。"""
+    agent_file = tmp_path / "planner.md"
+    agent_file.write_text(
+        "---\n"
+        "name: Planner\n"
+        "description: 规划子代理\n"
+        "mount_master_agents: default, plan\n"
+        "---\n"
+        "你是规划子代理。\n",
+        encoding="utf-8",
+    )
+
+    definitions = CustomSubAgentLoader(tmp_path).load()
+
+    assert definitions[0].mount_master_agents == ("default", "plan")
+
+
 def test_hook_registry_rejects_unknown_name() -> None:
     """测试 HookRegistry 对非法 tool_hook 名称抛出 INVALID_SUBAGENT_CONFIG。"""
     registry = HookRegistry(tool_hooks={"review-hooks": _FakeToolHook()}, model_hooks={})

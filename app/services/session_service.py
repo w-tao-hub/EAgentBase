@@ -40,9 +40,22 @@ class SessionService:
         self._lock_store = lock_store
         self._agent_provider = agent_provider
 
-    async def create_session(self) -> Session:
-        """创建新会话并绑定默认 Agent。"""
-        agent = self._agent_provider.get_default()
+    async def create_session(self, master_agent_name: str | None = None) -> Session:
+        """创建新会话并绑定指定主代理，未指定时绑定默认主代理。
+
+        Args:
+            master_agent_name: 主代理名称，为 None 时使用默认主代理。
+
+        Returns:
+            新创建的 Session 对象。
+
+        Raises:
+            ValueError: 当指定的主代理名称不存在时。
+        """
+        if master_agent_name is None:
+            agent = self._agent_provider.get_default()
+        else:
+            agent = self._agent_provider.get_master_profile_by_name(master_agent_name).agent
 
         session = Session(
             session_id=str(uuid.uuid4()),

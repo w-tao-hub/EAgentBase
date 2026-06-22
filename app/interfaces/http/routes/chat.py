@@ -36,7 +36,7 @@ async def chat(
     所有业务错误通过 SSE request_failed 事件返回，而不是使用 HTTP 4xx/5xx 错误码。
     同时启动后台任务监控 SSE 连接状态，若客户端断开则触发运行取消。
     """
-    logger.info("聊天请求: session_id=%s, message_length=%d", payload.session_id, len(payload.message))
+    logger.info("聊天请求: session_id=%s, master_agent_name=%s, message_length=%d", payload.session_id, payload.master_agent_name, len(payload.message))
 
     # 创建取消事件，用于 SSE 断开后通知 ChatService 中断运行。
     cancel_event = asyncio.Event()
@@ -59,6 +59,7 @@ async def chat(
 
     event_iterator = chat_service.stream_chat(
         session_id=payload.session_id,
+        master_agent_name=payload.master_agent_name,
         user_message=payload.message,
         metadata=payload.metadata,
         cancel_event=cancel_event,

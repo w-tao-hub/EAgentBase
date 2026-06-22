@@ -180,6 +180,14 @@ class TaskTool(Tool):
         if not description or not subagent_type or not prompt:  # 必填参数缺失
             return ToolResult(content="Task 缺少 description、subagent_type 或 prompt", is_error=True)  # 返回错误
 
+        # 校验 subagent_type 是否挂载到当前主代理
+        # TaskTool 只持有当前主代理可见的子代理 profiles
+        if subagent_type not in self._child_profiles:  # 子代理类型未挂载到当前主代理
+            return ToolResult(  # 返回错误结果
+                content=f"{ErrorCode.SUBAGENT_NOT_MOUNTED.value}: {subagent_type} 未挂载到当前主代理",  # 错误消息
+                is_error=True,  # 标记为错误
+            )
+
         # subagent_type 匹配大小写敏感："plan" 不会命中 "Plan"
         child_id = resume or self._new_child_id(subagent_type)  # 有 resume 时用现有 child_id，否则生成新的
         is_resume = bool(resume)  # 有 resume 值即为 resume 模式

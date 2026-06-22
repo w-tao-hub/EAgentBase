@@ -8,7 +8,7 @@
 
 当前能力边界：
 
-- 已实现：`POST /sessions`、`GET /sessions/{session_id}`、`POST /chat`、`POST /runs/{run_id}/cancel`、`GET /runs/{run_id}`、SSE 流式输出、Redis 会话持久化（单点与 Sentinel 双模式）、会话单活跃运行锁与心跳、健康检查、日志系统、启动脚本、Tool 系统（Task 子代理派发、Plan CRUD、Skill、MCP 适配、大结果持久化与查询、Python 脚本执行）、Agent Loop 多轮编排、Hook 系统、子代理执行服务（ChildAgentRunner，支持动态工具注入）、子代理配置加载（默认 Worker + 自定义 md）、子代理上下文隔离与 session 级命名空间隔离（plan/task）、可恢复子代理列表查询（ListResumableSubagents）、取消控制（API 取消 + SSE 断链取消 + 跨进程 Redis 广播取消）、上下文摘要压缩、用户消息元数据、Store 抽象端口层（企业可替换存储后端，默认 Redis 适配器）。
+- 已实现：`POST /sessions`、`GET /sessions/{session_id}`、`POST /chat`、`POST /runs/{run_id}/cancel`、`GET /runs/{run_id}`、SSE 流式输出、Redis 会话持久化（单点与 Sentinel 双模式）、会话单活跃运行锁与心跳、健康检查、日志系统、启动脚本、Tool 系统（Task 子代理派发、Plan CRUD、Skill、MCP 适配、大结果持久化与查询、Python 脚本执行）、Agent Loop 多轮编排、Hook 系统、子代理执行服务（ChildAgentRunner，支持动态工具注入）、子代理配置加载（默认 Worker + 自定义 md）、子代理上下文隔离与 session 级命名空间隔离（plan/task）、可恢复子代理列表查询（ListResumableSubagents）、取消控制（API 取消 + SSE 断链取消 + 跨进程 Redis 广播取消）、上下文摘要压缩、用户消息元数据、Store 抽象端口层（企业可替换存储后端，默认 Redis 适配器）、多主代理静态注册（default/plan）、/sessions 主代理绑定、/chat 按 master_agent_name 显式路由、子代理按主代理挂载可见。
 
 - 通用智能体（Worker）：默认子代理。支持主代理动态指定可用工具列表，可执行包括所有工具在内的多样化任务。采用简化提示词设计，无领域约束，适配各类开发场景。支持 resume 恢复执行，支持 session 级命名空间隔离。可自行修改 Worker 智能体除工具列表外的其余参数。
 
@@ -40,7 +40,7 @@
 app/
 ├── __init__.py                                        应用包声明。
 ├── main.py                                            FastAPI 应用装配器；注册中间件、异常处理器、路由和依赖容器。
-├── config.py                                          `Settings` 定义；统一收口运行、Redis（单点/Sentinel 双模式）、日志、CORS、Uvicorn、主智能体配置。
+├── config.py                                          `Settings` 定义；统一收口运行、Redis、日志、CORS、Uvicorn、模型参数等配置。
 ├── bootstrap/                                         组合根目录，负责依赖装配。
 │   ├── __init__.py                                    包标记。
 │   ├── container.py                                   唯一组合根；按模式装配 Redis（单点/Sentinel）、Store、StoreTransaction、RunCancelBus、AgentProvider、服务层、工具与运行时依赖。
@@ -85,7 +85,7 @@ app/
 ├── infra/                                             外部依赖适配层目录。
 │   ├── agents/                                        智能体配置加载实现目录。
 │   │   ├── __init__.py                                导出 `MasterAgentProvider`。
-│   │   ├── master_agent_provider.py                   主智能体提供者。
+│   │   ├── master_agent_provider.py                   内置主代理定义、主代理 prompt 加载与多 profile 提供者。
 │   │   ├── master_prompt.md                           主智能体系统提示词文件。
 │   │   ├── default_sub_agents/                        默认子代理配置与 prompt 资源目录。
 │   │   │   ├── __init__.py                            包标记。
@@ -249,9 +249,8 @@ tests/
 ```text
 POST /sessions
 -> app/interfaces/http/routes/sessions.py
--> app/interfaces/http/dependencies.py
--> SessionService.create_session()
--> MasterAgentProvider.get_default()
+-> SessionService.create_session(master_agent_name?)
+-> MasterAgentProvider.get_default() 或 get_master_profile_by_name()
 -> SessionStore.create_session()
 ```
 
@@ -261,16 +260,15 @@ POST /sessions
 
 ```text
 POST /chat
--> app/interfaces/http/routes/chat.py
-   -> 创建 cancel_event + 启动 SSE 断链监控
-   -> encode_sse(event_iterator)
--> app/interfaces/http/dependencies.py
+-> ChatRequest(master_agent_name 必填)
 -> ChatService.stream_chat()
+   -> MasterAgentProvider.get_master_profile_by_name(master_agent_name)
+   -> 校验 session.agent_id == profile.agent_id
    -> ChatRunLockScope.acquire()                    # 会话锁 + 心跳续期
    -> SessionStore.append_main_message(user)
    -> StoreTransaction.create_run_and_index_session()
    -> ContextBuilder.build_llm_messages()            # 构建上下文
-   -> AgentLoop.run()                               # 多轮循环编排
+   -> AgentLoop.run(profile)                        # 多轮循环编排
      -> AgentRuntime.stream_once()                  # 单次 LLM 调用
        -> LiteLLMAdapter.stream_completion()         # 流式调用 LLM
          cancel_event check                         # ← 取消检测点：chunk 输出中
@@ -370,10 +368,10 @@ AgentLoop 工具执行阶段
 
 ```text
 主智能体配置链:
-app/config.py(.env) + app/infra/agents/master_prompt.md
--> app/infra/agents/master_agent_provider.py
+app/config.py(.env) + app/infra/agents/master_prompt.md（等各 profile prompt 文件）
+-> app/infra/agents/master_agent_provider.py（多 profile 提供者：default/plan）
 -> app/services/agent_provider.py
--> SessionService / ChatService
+-> SessionService / ChatService（均通过 get_master_profile_by_name() 获取对应 profile）
 
 持久化链:
 SessionService / ChatService / RunControlService
@@ -518,6 +516,17 @@ MCP 用于接入外部工具服务（数据库、文件系统、Web 等），Ski
 
 > 提示：在 `agents/` 目录下创建 `.md` 文件定义子代理配置，或直接在 `app/infra/agents/default_sub_agents/definitions.py` 中添加声明式配置。
 
+> **子代理挂载到主代理**：子代理通过 `mount_master_agents` 字段控制能被哪些主代理调用。缺省时只挂载到 `default`。主代理的 tool/hook/skill 挂载在 `container.py` 的三个字典中配置，子代理挂载关系与主代理挂载关系相互独立。示例：
+> ```yaml
+> ---
+> name: CodeReviewer
+> description: "代码审查子代理"
+> mount_master_agents:
+>   - default
+>   - review
+> ---
+> ```
+
 > **Hook 配置说明**：子代理支持 `tool_hook_profiles` 和 `model_hook_profiles` 两个字段，值为 Hook 名称列表。名称必须与 `app/bootstrap/container.py` 中 `HookRegistry` 注册的 key 对应。当前内置 Hook 及对应名称：
 > - `persist_large_result` — 大工具结果持久化（ToolHook）
 > 添加自定义 Hook 时，先在 `container.py` 的 `HookRegistry(tool_hooks={...}, model_hooks={...})` 中注册，然后在子代理配置中引用注册的名称即可。
@@ -527,7 +536,71 @@ MCP 用于接入外部工具服务（数据库、文件系统、Web 等），Ski
 修改主智能体的行为风格、约束规则等。
 修改工具描述以及工具参数描述规则。
 
-> 提示：编辑 `app/infra/agents/master_prompt.md`，调整主智能体的 system prompt。
+> 提示：编辑 `app/infra/agents/master_prompt.md`（default 主代理）或 `app/infra/agents/plan_master_prompt.md`（plan 主代理），调整对应主代理的 system prompt。新增主代理时需创建对应的 prompt 文件，并在 `app/bootstrap/container.py` 的三个挂载字典中配置 tool/hook/skill。
+
+### 主代理路由
+
+系统内置 `default` 和 `plan` 两个主代理。创建会话时可通过 `master_agent_name` 绑定主代理，未传时默认绑定 `default`。调用 `/chat` 时必须显式传入 `master_agent_name`，且必须与会话绑定的主代理一致。
+
+子代理 md frontmatter 可通过 `mount_master_agents` 控制挂载关系。未配置时只挂载到 `default`。
+
+#### 主代理 tool/hook/skill 挂载配置
+
+每个主代理的可用工具、Hook 管线、Skill 通过 `app/bootstrap/container.py` 顶部的三个字典控制：
+
+```python
+# 按主代理名称控制 tool 挂载。不在字典中 = 不挂载任何固定 tool。
+_MASTER_TOOL_MOUNTS: dict[str, tuple[str, ...]] = {
+    "default": ("plan_create", "plan_get", "plan_update", "plan_list",
+                "skill", "query_tool_result", "run_python_script"),
+}
+
+# 按主代理名称控制 tool_hook 挂载。不在字典中 = 空管线。
+_MASTER_HOOK_MOUNTS: dict[str, tuple[str, ...]] = {
+    "default": ("persist_large_result",),
+}
+
+# 按主代理名称控制 skill 挂载。不在字典中 = 不加载任何 skill。
+_MASTER_SKILL_MOUNTS: dict[str, tuple[str, ...]] = {
+    "default": ("test-skill",),
+}
+```
+
+**配置规则：**
+
+| 项目 | 不在字典中 | 显式空元组 `()` | 有值 |
+|------|----------|--------------|------|
+| tool | 无固定 tool | 无固定 tool | 只挂载列表中的 tool |
+| hook | 空管线 | 空管线 | 按名称装配独立管线 |
+| skill | 无 skill | 无 skill | 按名称加载 skill 内容 |
+
+> MCP 动态工具不受 `_MASTER_TOOL_MOUNTS` 控制，始终全部注册。
+
+**新增主代理示例：**
+
+```python
+# 1. 在 master_agent_provider.py 中加定义
+MASTER_AGENT_DEFINITIONS = (
+    ...,
+    MasterAgentDefinition(agent_id="review", name="review", prompt_file="review_master_prompt.md"),
+)
+
+# 2. 创建 review_master_prompt.md
+
+# 3. 在 container.py 三个字典中加挂载配置
+_MASTER_TOOL_MOUNTS = {
+    "default": (...),
+    "review":  ("plan_create", "plan_get", "skill"),
+}
+_MASTER_HOOK_MOUNTS = {
+    "default": ("persist_large_result",),
+    "review":  ("persist_large_result",),
+}
+_MASTER_SKILL_MOUNTS = {
+    "default": ("test-skill",),
+    "review":  ("test-skill",),
+}
+```
 
 ### 第六步：替换 Store 后端（可选）
 

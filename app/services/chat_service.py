@@ -145,12 +145,13 @@ class ChatService:
     async def stream_chat(
         self,
         session_id: str,
+        master_agent_name: str,
         user_message: str,
         metadata: dict | None = None,
         cancel_event: asyncio.Event | None = None,
     ) -> AsyncIterator[Event]:
         """执行流式聊天。"""
-        logger.info("开始流式聊天: session_id=%s", session_id)
+        logger.info("开始流式聊天: session_id=%s, master_agent_name=%s", session_id, master_agent_name)
 
         # Step 1: 检查会话是否存在
         session = await self._session_store.get_session(session_id)
@@ -162,7 +163,34 @@ class ChatService:
             )
             return
 
-        # Step 2: 生成 run_id
+        # Step 2: 按名称路由主代理并校验 session 绑定
+        try:
+            profile = self._agent_provider.get_master_profile_by_name(master_agent_name)
+        except ValueError as error:
+            logger.error("未知主代理: master_agent_name=%s", master_agent_name)
+            yield RequestFailedEvent(
+                error_code=ErrorCode.UNKNOWN_MASTER_AGENT,
+                message=str(error),
+            )
+            return
+
+        if session.agent_id != profile.agent_id:
+            logger.error(
+                "主代理与会话绑定不一致: session_id=%s, session_agent_id=%s, request_agent_id=%s",
+                session_id,
+                session.agent_id,
+                profile.agent_id,
+            )
+            yield RequestFailedEvent(
+                error_code=ErrorCode.MASTER_AGENT_SESSION_MISMATCH,
+                message=(
+                    f"Session {session_id} is bound to master agent {session.agent_id}, "
+                    f"but request uses {profile.agent_id}"
+                ),
+            )
+            return
+
+        # Step 3: 生成 run_id
         run_id = str(uuid.uuid4())
         logger.info("生成 Run ID: run_id=%s", run_id)
         terminal_event: RunCompletedEvent | RunFailedEvent | RunCancelledEvent | None = None
@@ -173,7 +201,7 @@ class ChatService:
         await self.start_cancel_listener()
 
         try:
-            # Step 3: 进入聊天运行锁作用域
+            # Step 4: 进入聊天运行锁作用域
             async with self._create_run_lock_scope(session_id=session_id, run_id=run_id):
                 effective_cancel_event = cancel_event if cancel_event is not None else asyncio.Event()
                 self._active_cancel_events[run_id] = effective_cancel_event
@@ -184,9 +212,8 @@ class ChatService:
                     len(self._active_cancel_events),
                 )
                 try:
-                    # Step 4: 准备上下文：用户消息、Agent、历史、LLM 消息和 Run
+                    # Step 5: 准备上下文：用户消息、Agent、历史、LLM 消息和 Run
                     user_message_model = self._build_user_message(user_message)
-                    profile = self._agent_provider.get_default_profile()
                     agent = profile.agent
                     history, history_indices = await self._session_store.list_main_active_messages_with_indices(session_id)
                     context_build_result = await ContextBuilder.build_llm_messages_with_repair_meta(

@@ -4,7 +4,13 @@ from __future__ import annotations
 
 from typing import Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+
+
+class CreateSessionRequest(BaseModel):
+    """创建会话请求模型。"""
+
+    master_agent_name: str | None = Field(default=None, min_length=1)
 
 
 class CreateSessionResponse(BaseModel):

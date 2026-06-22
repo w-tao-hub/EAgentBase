@@ -90,27 +90,28 @@ class RecordingCancelBus:
 class FakeAgentProvider(AgentProvider):
     """模拟 Agent 提供者（v2 多 profile 版本）。
 
+    持有 profiles 字典（按名称索引），支持多主代理路由与 session 绑定校验。
     同时提供 Agent 静态配置访问和执行 profile 访问，
     兼容旧的 get_default() 和新的 get_default_profile() 方法。
     """
 
     def __init__(self, profile: AgentExecutionProfile | None = None) -> None:  # 构造函数
-        """初始化模拟提供者。
+        """初始化模拟提供者，构造多主代理 profiles 字典。
 
         Args:
             profile: 预设的执行 profile；未提供时自动构造默认 profile
         """
-        if profile is not None:  # 使用外部注入的 profile
-            self.profile = profile  # 保存外部注入的 profile
-        else:
+        if profile is not None:  # 使用外部注入的 profile 作为默认主代理
+            self._default_profile = profile  # 保存外部注入的默认 profile
+        else:  # 无外部注入时构造内置默认 profile
             agent = Agent(  # 创建默认 Agent 静态配置
-                agent_id="master-agent",
-                name="Master Agent",
+                agent_id="default",
+                name="Default Agent",
                 model="gpt-4.1-mini",
                 system_prompt="你是一个乐于助人的助手。",
                 temperature=0.2,
             )
-            self.profile = AgentExecutionProfile(  # 构造默认执行 profile
+            self._default_profile = AgentExecutionProfile(  # 构造默认执行 profile
                 agent_id=agent.agent_id,
                 agent=agent,
                 prompt_source=AgentPromptSource(kind="file", path="master_prompt.md"),
@@ -119,20 +120,71 @@ class FakeAgentProvider(AgentProvider):
                 tool_hook_pipeline=ToolHookPipeline(),  # 空 Hook 管线
                 max_turns=10,
             )
+        # 构造 profiles 字典，按名称索引
+        self._profiles: dict[str, AgentExecutionProfile] = {  # 多主代理 profiles 字典
+            "default": self._default_profile,  # 默认主代理
+            "plan": AgentExecutionProfile(  # 规划主代理，用于测试 session 绑定不匹配场景
+                agent_id="plan-agent",
+                agent=Agent(
+                    agent_id="plan-agent",
+                    name="Plan Agent",
+                    model="gpt-4.1-mini",
+                    system_prompt="你是一个规划助手。",
+                    temperature=0.2,
+                ),
+                prompt_source=AgentPromptSource(kind="file", path="plan_prompt.md"),
+                runtime=FakeAgentRuntime(),
+                tool_registry=ToolRegistry(),
+                tool_hook_pipeline=ToolHookPipeline(),
+                max_turns=10,
+            ),
+        }
 
     def get_default(self) -> Agent:  # 获取默认 Agent
         """返回默认 Agent 的静态配置。"""
-        return self.profile.agent
+        return self._default_profile.agent  # 返回默认 profile 的 Agent 配置
 
     def get_default_profile(self) -> AgentExecutionProfile:  # 获取默认执行 profile
         """返回默认主 Agent 的执行 profile。"""
-        return self.profile
+        return self._default_profile  # 返回默认 profile
 
-    def get_profile(self, agent_id: str) -> AgentExecutionProfile:  # 按 ID 获取 profile
+    def get_master_profile_by_name(self, name: str) -> AgentExecutionProfile:  # 按名称获取主代理 profile
+        """按主代理名称获取执行 profile。
+
+        Args:
+            name: 主代理名称（与 profiles 字典中的 key 对应）
+
+        Returns:
+            对应的 AgentExecutionProfile
+
+        Raises:
+            ValueError: 当指定名称的主代理不存在时
+        """
+        profile = self._profiles.get(name)  # 从字典中按名称查找
+        if profile is None:  # 未找到对应名称的 profile
+            raise ValueError(f"未知主代理: {name}")  # 抛出 ValueError
+        return profile  # 返回找到的 profile
+
+    def get_master_profile(self, agent_id: str) -> AgentExecutionProfile:  # 按 ID 获取主代理 profile
+        """按主代理 ID 获取执行 profile。
+
+        Args:
+            agent_id: 主代理唯一标识
+
+        Returns:
+            对应的 AgentExecutionProfile
+
+        Raises:
+            ValueError: 当指定 ID 的主代理不存在时
+        """
+        for profile in self._profiles.values():  # 遍历所有已注册主代理
+            if profile.agent_id == agent_id:  # 匹配 agent_id
+                return profile  # 返回匹配的 profile
+        raise ValueError(f"未知主代理 ID: {agent_id}")  # 未找到则抛出 ValueError
+
+    def get_profile(self, agent_id: str) -> AgentExecutionProfile:  # 按 ID 获取任意 profile
         """按 agent_id 获取对应的执行 profile。"""
-        if agent_id != self.profile.agent_id:  # 非默认 profile 的 agent_id 视为未注册
-            raise ValueError(agent_id)
-        return self.profile
+        return self.get_master_profile(agent_id)  # 委托给 get_master_profile
 
     def get_child_profile(self, subagent_type: str) -> AgentExecutionProfile:  # 获取子代理 profile
         """按子代理类型获取执行 profile，测试中无子代理。"""
@@ -166,7 +218,7 @@ async def chat_service(fake_redis):  # ChatService 夹具
 
     # 构造 master profile，将 fake_runtime 注入其中
     agent = Agent(  # 创建默认 Agent 静态配置
-        agent_id="master-agent",
+        agent_id="default",
         name="Master Agent",
         model="gpt-4.1-mini",
         system_prompt="你是一个乐于助人的助手。",
@@ -225,7 +277,7 @@ async def session_with_history(fake_redis):  # 带历史消息的会话夹具
     # 创建会话
     session = Session(  # 构造会话实例
         session_id="session-1",
-        agent_id="default-agent",
+        agent_id="default",
         created_at=datetime.now(timezone.utc),
     )
     await session_store.create_session(session)  # 创建会话记录
@@ -254,11 +306,31 @@ async def session_with_history(fake_redis):  # 带历史消息的会话夹具
 @pytest.mark.asyncio  # 标记异步测试
 async def test_chat_service_returns_request_failed_for_missing_session(chat_service):  # 测试会话不存在
     """测试当会话不存在时应返回 request_failed 事件。"""
-    events = [event async for event in chat_service.stream_chat("non-existent", "hi")]  # 流式聊天
+    events = [event async for event in chat_service.stream_chat("non-existent", "default", "hi")]  # 流式聊天
 
     assert len(events) == 1  # 验证只有一个事件
     assert events[0].event_name == "request_failed"  # 验证是 request_failed 事件
     assert events[0].error_code == ErrorCode.SESSION_NOT_FOUND  # 验证错误码正确
+
+
+@pytest.mark.asyncio  # 标记异步测试
+async def test_chat_service_returns_request_failed_for_unknown_master_agent(chat_service, session_with_history):  # 测试未知主代理名称
+    """验证未知主代理名称返回 request_failed。"""
+    events = [event async for event in chat_service.stream_chat("session-1", "ghost", "hi")]  # 使用不存在的代理名称
+
+    assert len(events) == 1  # 验证只有一个事件
+    assert events[0].event_name == "request_failed"  # 验证是 request_failed 事件
+    assert events[0].error_code == ErrorCode.UNKNOWN_MASTER_AGENT  # 验证错误码正确
+
+
+@pytest.mark.asyncio  # 标记异步测试
+async def test_chat_service_rejects_master_agent_session_mismatch(chat_service, session_with_history):  # 测试主代理会话绑定不匹配
+    """验证聊天主代理必须与 session 绑定主代理一致。"""
+    events = [event async for event in chat_service.stream_chat("session-1", "plan", "hi")]  # session 绑定了 default，但请求的是 plan
+
+    assert len(events) == 1  # 验证只有一个事件
+    assert events[0].event_name == "request_failed"  # 验证是 request_failed 事件
+    assert events[0].error_code == ErrorCode.MASTER_AGENT_SESSION_MISMATCH  # 验证错误码正确
 
 
 @pytest.mark.asyncio  # 标记异步测试
@@ -267,7 +339,7 @@ async def test_chat_service_persists_terminal_state_before_emitting_run_complete
 ):  # 测试终态持久化顺序
     """测试 ChatService 必须在发出 run_completed 之前先持久化终态。"""
     # 收集所有事件
-    events = [event async for event in chat_service.stream_chat("session-1", "hi")]  # 流式聊天
+    events = [event async for event in chat_service.stream_chat("session-1", "default", "hi")]  # 流式聊天
 
     # 验证事件顺序
     assert [event.event_name for event in events] == ["run_started", "message_delta", "message_delta", "run_completed"]  # 验证事件顺序
@@ -294,7 +366,7 @@ async def test_chat_service_persists_terminal_state_before_emitting_run_complete
 @pytest.mark.asyncio  # 标记异步测试
 async def test_chat_service_stream_chat_sets_run_ttl(chat_service, session_with_history, fake_redis):
     """测试主聊天链路创建 run 时会写入配置的 TTL。"""
-    events = [event async for event in chat_service.stream_chat("session-1", "hi")]
+    events = [event async for event in chat_service.stream_chat("session-1", "default", "hi")]
 
     actual_run_id = events[0].run_id
     ttl = await fake_redis.ttl(f"test:run:{actual_run_id}")
@@ -401,7 +473,7 @@ async def test_chat_service_builds_execution_context_and_passes_it_to_runtime(
 ):  # 测试 metadata 参数
     """测试 ChatService 会构造 ExecutionContext 并透传给 Runtime。"""
     # 收集所有事件
-    events = [event async for event in chat_service.stream_chat("session-1", "hi", metadata={"trace_id": "req-1"})]  # 带 metadata 的流式聊天
+    events = [event async for event in chat_service.stream_chat("session-1", "default", "hi", metadata={"trace_id": "req-1"})]  # 带 metadata 的流式聊天
 
     assert events[0].event_name == "run_started"  # 验证运行开始
 
@@ -411,7 +483,7 @@ async def test_chat_service_builds_execution_context_and_passes_it_to_runtime(
     assert fake_runtime.last_call["context"] is not None  # 验证上下文已传递
     assert fake_runtime.last_call["context"].metadata == {"trace_id": "req-1"}  # 验证 metadata 已进入上下文
     assert fake_runtime.last_call["context"].session_id == "session-1"  # 验证会话 ID 正确
-    assert fake_runtime.last_call["context"].agent.agent_id == "master-agent"  # 验证 Agent 已进入上下文
+    assert fake_runtime.last_call["context"].agent.agent_id == "default"  # 验证 Agent 已进入上下文
     # 验证消息内容正确
     assert fake_runtime.last_call["messages"][-1]["content"] == "hi"  # 验证最后一条消息内容
 
@@ -422,7 +494,7 @@ async def test_chat_service_releases_lock_after_completion(chat_service, session
     lock_store = RedisLockStore(fake_redis, key_prefix="test")  # 创建锁存储
 
     # 收集所有事件
-    events = [event async for event in chat_service.stream_chat("session-1", "hi")]  # 流式聊天
+    events = [event async for event in chat_service.stream_chat("session-1", "default", "hi")]  # 流式聊天
 
     assert events[-1].event_name == "run_completed"  # 验证最后一个事件是完成
 
@@ -528,7 +600,7 @@ async def test_chat_service_returns_request_failed_when_session_locked(
     )
 
     # 收集所有事件
-    events = [event async for event in service.stream_chat("session-1", "hi")]  # 流式聊天
+    events = [event async for event in service.stream_chat("session-1", "default", "hi")]  # 流式聊天
 
     assert len(events) == 1  # 验证只有一个事件
     assert events[0].event_name == "request_failed"  # 验证是 request_failed 事件
@@ -553,7 +625,7 @@ async def test_chat_service_emits_run_failed_and_persists_failed_state(
 
     # 将 fake_runtime 注入到 profile，确保 AgentLoop 使用正确的模拟 Runtime
     agent = Agent(  # 创建默认 Agent 静态配置
-        agent_id="master-agent",
+        agent_id="default",
         name="Master Agent",
         model="gpt-4.1-mini",
         system_prompt="你是一个乐于助人的助手。",
@@ -590,7 +662,7 @@ async def test_chat_service_emits_run_failed_and_persists_failed_state(
     )
 
     # 收集所有事件
-    events = [event async for event in service.stream_chat("session-1", "hi")]  # 流式聊天
+    events = [event async for event in service.stream_chat("session-1", "default", "hi")]  # 流式聊天
 
     # 验证事件顺序
     assert [event.event_name for event in events] == ["run_started", "run_failed"]  # 验证事件顺序
@@ -658,7 +730,7 @@ async def test_chat_service_appends_user_message_before_runtime(fake_redis, sess
 
     # 将 RecordingFakeRuntime 注入到 profile，确保 AgentLoop 使用正确的模拟 Runtime
     agent = Agent(  # 创建默认 Agent 静态配置
-        agent_id="master-agent",
+        agent_id="default",
         name="Master Agent",
         model="gpt-4.1-mini",
         system_prompt="你是一个乐于助人的助手。",
@@ -694,7 +766,7 @@ async def test_chat_service_appends_user_message_before_runtime(fake_redis, sess
     )
 
     # 执行
-    events = [event async for event in service.stream_chat("session-1", "test message")]  # 流式聊天
+    events = [event async for event in service.stream_chat("session-1", "default", "test message")]  # 流式聊天
 
     # 验证新的调用顺序：先读旧历史，再持久化当前用户消息，最后再调用 Runtime。
     assert call_order[:3] == ["list_main_active_messages_with_indices", "append_message", "runtime_stream"]  # 验证上下文准备顺序
@@ -749,7 +821,7 @@ async def test_chat_service_passes_injected_context_trim_policy_to_context_build
 
     # 将 fake_runtime 注入到 profile，确保 AgentLoop 使用正确的模拟 Runtime
     agent = Agent(  # 创建默认 Agent 静态配置
-        agent_id="master-agent",
+        agent_id="default",
         name="Master Agent",
         model="gpt-4.1-mini",
         system_prompt="你是一个乐于助人的助手。",
@@ -788,7 +860,7 @@ async def test_chat_service_passes_injected_context_trim_policy_to_context_build
         context_trim_policy=policy,
     )
 
-    events = [event async for event in service.stream_chat("session-1", "hi")]  # 流式聊天
+    events = [event async for event in service.stream_chat("session-1", "default", "hi")]  # 流式聊天
 
     assert events[-1].event_name == "run_completed"  # 验证流程正常完成
     assert policy.called is True  # 验证注入的策略确实被 ContextBuilder 使用
@@ -837,7 +909,7 @@ async def test_chat_service_releases_lock_when_stream_is_closed_early(fake_redis
         settings=settings,
     )
 
-    stream = service.stream_chat("session-1", "hi")  # 获取异步事件流，但先不完整消费
+    stream = service.stream_chat("session-1", "default", "hi")  # 获取异步事件流，但先不完整消费
     first_event = await anext(stream)  # 只消费第一个事件，确保已进入锁作用域
     assert first_event.event_name == "run_started"  # 验证流已正式开始
 
@@ -893,7 +965,7 @@ async def test_chat_service_fails_run_when_lock_heartbeat_is_lost(fake_redis, se
         settings=settings,
     )
 
-    events = [event async for event in service.stream_chat("session-1", "hi")]  # 消费完整事件流
+    events = [event async for event in service.stream_chat("session-1", "default", "hi")]  # 消费完整事件流
 
     assert [event.event_name for event in events] == ["run_started", "run_failed"]  # 验证最终收敛为失败
     assert events[-1].error_code == ErrorCode.SESSION_LOCK_HEARTBEAT_FAILED  # 验证错误码正确
@@ -918,7 +990,7 @@ async def test_chat_service_marks_session_history_dirty_when_context_builder_det
     session_store = RedisSessionStore(fake_redis, key_prefix="test")
     session = Session(
         session_id="session-1",
-        agent_id="default-agent",
+        agent_id="default",
         created_at=datetime.now(timezone.utc),
     )
     await session_store.create_session(session)
@@ -943,7 +1015,7 @@ async def test_chat_service_marks_session_history_dirty_when_context_builder_det
 
     # 将 fake_runtime 注入到 profile，确保 AgentLoop 使用正确的模拟 Runtime
     agent = Agent(  # 创建默认 Agent 静态配置
-        agent_id="master-agent",
+        agent_id="default",
         name="Master Agent",
         model="gpt-4.1-mini",
         system_prompt="你是一个乐于助人的助手。",
@@ -977,7 +1049,7 @@ async def test_chat_service_marks_session_history_dirty_when_context_builder_det
         ),
     )
 
-    events = [event async for event in service.stream_chat("session-1", "继续")]  # 流式聊天
+    events = [event async for event in service.stream_chat("session-1", "default", "继续")]  # 流式聊天
 
     assert events[-1].event_name == "run_completed"
     assert await session_store.is_history_dirty("session-1") is True
@@ -1051,7 +1123,7 @@ async def test_chat_service_returns_context_compression_failed_when_trim_policy_
         context_trim_policy=FailingCompressionPolicy(),
     )
 
-    events = [event async for event in service.stream_chat(session_with_history.session_id, "hi")]
+    events = [event async for event in service.stream_chat(session_with_history.session_id, "default", "hi")]
 
     assert len(events) == 1
     assert events[0].event_name == "request_failed"
@@ -1130,7 +1202,7 @@ async def test_chat_service_flushes_background_tool_write_before_terminal_and_lo
     )
 
     try:
-        stream = service.stream_chat(session_with_history.session_id, "hi")
+        stream = service.stream_chat(session_with_history.session_id, "default", "hi")
         first_event = await anext(stream)
         second_event = await anext(stream)
 
@@ -1211,7 +1283,7 @@ async def test_chat_service_converts_background_write_failure_to_run_failed(
     )
 
     try:
-        events = [event async for event in service.stream_chat(session_with_history.session_id, "hi")]
+        events = [event async for event in service.stream_chat(session_with_history.session_id, "default", "hi")]
     finally:
         await service.aclose()
 
